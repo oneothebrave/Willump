@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createTerminalFailureWatcher, hasTerminalFailure } from "./terminalFailure";
+import {
+  asyncInputSignal,
+  createTerminalFailureWatcher,
+  hasTerminalFailure,
+} from "./terminalFailure";
 import { mkdtemp, writeFile, appendFile, rm, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +19,105 @@ test("only explicit terminal errors on the selected turn qualify", () => {
   assert.equal(hasTerminalFailure(record("task_complete", "a", null), "a"), false);
   assert.equal(hasTerminalFailure(record("warning", "a", { message: "retry" }), "a"), false);
   assert.equal(hasTerminalFailure('{"partial":', "a"), false);
+});
+
+const inputRecord = (turn: string, item: Record<string, unknown>) =>
+  JSON.stringify({
+    type: "event_msg",
+    payload: { type: "item_completed", turn_id: turn, item },
+  }) + "\n";
+
+test("async input recognition uses typed metadata, never message wording or other turns", () => {
+  const question = { type: "AgentMessage", id: "q", questions: [{ title: "private question" }] };
+  assert.deepEqual(asyncInputSignal(inputRecord("t", question), "t"), { id: "q", waiting: true });
+  assert.equal(asyncInputSignal(inputRecord("other", question), "t"), undefined);
+  assert.equal(
+    asyncInputSignal(
+      inputRecord("t", { type: "CommandExecution", id: "cmd", questions: question.questions }),
+      "t",
+    ),
+    undefined,
+  );
+  assert.equal(
+    asyncInputSignal(
+      inputRecord("t", { type: "AgentMessage", id: "text", content: "Do you approve?" }),
+      "t",
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    asyncInputSignal(
+      inputRecord("t", { type: "UserMessage", id: "reply", content: "private reply" }),
+      "t",
+    ),
+    { id: "reply", waiting: false },
+  );
+});
+
+test("async metadata watcher waits for complete records and commits replies without waiting for tool completion", async () => {
+  const files = await fixture();
+  const observed: boolean[] = [];
+  const watcher = createTerminalFailureWatcher(
+    files.root,
+    () => ({ sessionId: "session", turnId: "t" }),
+    () => {},
+    { onAsyncInput: (_s, _t, waiting) => observed.push(waiting) },
+  );
+  const question = inputRecord("t", {
+    type: "AgentMessage",
+    id: "q",
+    questions: [{ title: "private" }],
+  });
+  try {
+    await writeFile(files.path, question.slice(0, -1));
+    await watcher.poll();
+    assert.deepEqual(observed, []);
+    await appendFile(files.path, "\n");
+    await watcher.poll();
+    assert.deepEqual(observed, [true]);
+    await appendFile(files.path, inputRecord("t", { type: "UserMessage", id: "answer" }));
+    await watcher.poll();
+    assert.deepEqual(observed, [true, false]);
+    // Replayed question metadata cannot resurrect an answered card.
+    await appendFile(files.path, question);
+    await watcher.poll();
+    assert.deepEqual(observed, [true, false, false]);
+  } finally {
+    watcher.stop();
+    await files.clean();
+  }
+});
+
+test("replaying old question history does not flash waiting, and stale turns cannot clear a new question", async () => {
+  const files = await fixture();
+  let turnId = "old";
+  const observed: { turn: string; waiting: boolean }[] = [];
+  const watcher = createTerminalFailureWatcher(
+    files.root,
+    () => ({ sessionId: "session", turnId }),
+    () => {},
+    { bytesPerPoll: 80, onAsyncInput: (_s, turn, waiting) => observed.push({ turn, waiting }) },
+  );
+  try {
+    await writeFile(
+      files.path,
+      inputRecord("old", { type: "AgentMessage", id: "old-q", questions: [{}] }) +
+        inputRecord("old", { type: "UserMessage", id: "old-answer" }),
+    );
+    for (let i = 0; i < 10; i++) await watcher.poll();
+    assert.ok(observed.length > 0 && observed.every((event) => !event.waiting));
+    turnId = "new";
+    await appendFile(
+      files.path,
+      inputRecord("new", { type: "AgentMessage", id: "new-q", questions: [{}] }) +
+        inputRecord("old", { type: "UserMessage", id: "delayed-answer" }),
+    );
+    for (let i = 0; i < 10; i++) await watcher.poll();
+    assert.deepEqual(observed[observed.length - 1], { turn: "new", waiting: true });
+  } finally {
+    watcher.stop();
+    await files.clean();
+  }
 });
 
 test("terminal error releases tools, holds error and ignores delayed hooks", () => {

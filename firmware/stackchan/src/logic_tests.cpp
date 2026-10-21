@@ -1,6 +1,9 @@
 #include <Arduino.h>
+#include "event_chime.h"
 #include "head_policy.h"
+#include "head_startup.h"
 #include "face_motion.h"
+#include "question_animation.h"
 #include "status_message.h"
 
 // This test firmware never initializes servos, power expander, Wi-Fi or NVS.
@@ -29,7 +32,7 @@ static DecodedMessage decode(const char* json, bool ready = true) {
 
 static void headTests() {
   HeadPolicy policy;
-  CHECK(policy.next(1000, true, "running") == -1);
+  CHECK(policy.next(1000, true) == -1);
   CHECK(!HeadPolicy::validCalibration(0, 620));
   CHECK(!HeadPolicy::validCalibration(950, 950));
   CHECK(HeadPolicy::validCalibration(591, 599));
@@ -37,59 +40,101 @@ static void headTests() {
   CHECK(!policy.safe(590));
   CHECK(!policy.safe(656));
   CHECK(policy.safe(655));
-  CHECK(policy.next(0, true, "idle") == -1);
-  CHECK(policy.next(349, true, "idle") == -1);
-  CHECK(policy.next(350, true, "idle") == 591);
+  CHECK(policy.next(0, false) == -1);
+  CHECK(policy.next(349, false) == -1);
+  CHECK(policy.next(350, false) == 591);
   policy.succeeded(591);
-  CHECK(policy.next(1000, true, "idle") == -1);
-  CHECK(policy.next(1000, true, "thinking") == -1);
-  CHECK(policy.next(1349, true, "thinking") == -1);
-  CHECK(policy.next(1350, true, "thinking") == 655);
+  CHECK(policy.next(1000, false) == -1);
+  CHECK(policy.next(1000, true) == -1);
+  CHECK(policy.next(1349, true) == -1);
+  CHECK(policy.next(1350, true) == 655);
   policy.succeeded(655);
-  for (const char* state :
-       {"waiting", "done", "error", "running", "editing", "tool", "searching", "speaking"}) {
-    CHECK(policy.next(2000, true, state) == -1);
-  }
+  CHECK(policy.next(2000, true) == -1);
   policy.disable();
-  CHECK(policy.next(2500, true, "running") == -1);
+  CHECK(policy.next(2500, true) == -1);
   policy.enable();
-  CHECK(policy.next(2500, true, "running") == -1);
-  CHECK(policy.next(2850, true, "running") == 655);
+  CHECK(policy.next(2500, true) == -1);
+  CHECK(policy.next(2850, true) == 655);
   policy.succeeded(655);
-  CHECK(policy.next(3000, false, "error") == -1);
-  CHECK(policy.next(3350, false, "error") == 591);
+  CHECK(policy.next(3000, false) == -1);
+  CHECK(policy.next(3350, false) == 591);
   policy.succeeded(591);
   policy.manual(607, 3500);
-  CHECK(policy.next(3500, true, "idle") == 607);
+  CHECK(policy.next(3500, true) == 607);
   policy.succeeded(607);
-  CHECK(policy.next(4000, true, "running") == -1);
+  CHECK(policy.next(4000, true) == -1);
   policy.enable();
-  CHECK(policy.next(4000, true, "running") == -1);
-  CHECK(policy.next(4350, true, "running") == 655);
+  CHECK(policy.next(4000, true) == -1);
+  CHECK(policy.next(4350, true) == 655);
   policy.failed(4350);
-  CHECK(policy.next(5349, true, "running") == -1);
-  CHECK(policy.next(5350, true, "running") == 655);
+  CHECK(policy.next(5349, true) == -1);
+  CHECK(policy.next(5350, true) == 655);
   policy.failed(5350);
-  CHECK(policy.next(6350, true, "running") == 655);
+  CHECK(policy.next(6350, true) == 655);
   policy.failed(6350);
   CHECK(policy.faulted());
-  CHECK(policy.next(100000, false, "idle") == -1);
+  CHECK(policy.next(100000, false) == -1);
   policy.enable();
   CHECK(!policy.faulted());
-  CHECK(policy.next(100000, false, "idle") == -1);
-  CHECK(policy.next(100350, false, "idle") == 591);
+  CHECK(policy.next(100000, false) == -1);
+  CHECK(policy.next(100350, false) == 591);
   policy.configure(591, 599, true);
-  CHECK(policy.next(0xfffffff0u, true, "running") == -1);
-  CHECK(policy.next(0x00000150u, true, "running") == 655);
+  CHECK(policy.next(0xfffffff0u, true) == -1);
+  CHECK(policy.next(0x00000150u, true) == 655);
   policy.configure(0, 599, true);
   CHECK(!policy.enabled());
-  CHECK(policy.next(10000, true, "running") == -1);
+  CHECK(policy.next(10000, true) == -1);
   policy.configure(591, 599, true);
-  policy.next(0, true, "idle");
+  policy.next(0, false);
   policy.succeeded(591);
-  policy.next(100, true, "running");
-  policy.next(200, true, "idle");
-  CHECK(policy.next(500, true, "idle") == -1);
+  policy.next(100, true);
+  policy.next(200, false);
+  CHECK(policy.next(500, false) == -1);
+  CHECK(policy.next(550, false) == -1);
+  CHECK(policy.next(600, true) == -1);
+  CHECK(policy.next(950, true) == 655);
+}
+
+static void headStartupTests() {
+  HeadStartupPolicy startup;
+  CHECK(startup.next(0) == HeadInitStep::None);
+  startup.restart(100);
+  CHECK(startup.next(100) == HeadInitStep::PowerOff);
+  CHECK(startup.attemptCount() == 1);
+  CHECK(startup.next(399) == HeadInitStep::None);
+  CHECK(startup.next(400) == HeadInitStep::PowerOn);
+  CHECK(startup.next(2399) == HeadInitStep::None);
+  CHECK(startup.next(2400) == HeadInitStep::Probe);
+  CHECK(startup.next(2401) == HeadInitStep::None);
+  startup.failed(2400);
+  CHECK(!startup.exhausted());
+  CHECK(startup.next(3399) == HeadInitStep::None);
+  CHECK(startup.next(3400) == HeadInitStep::PowerOff);
+  CHECK(startup.attemptCount() == 2);
+  CHECK(startup.next(3700) == HeadInitStep::PowerOn);
+  CHECK(startup.next(5700) == HeadInitStep::Probe);
+  startup.failed(5700);
+  CHECK(startup.next(6700) == HeadInitStep::PowerOff);
+  CHECK(startup.attemptCount() == HeadStartupPolicy::MAX_ATTEMPTS);
+  CHECK(startup.next(7000) == HeadInitStep::PowerOn);
+  CHECK(startup.next(9000) == HeadInitStep::Probe);
+  startup.failed(9000);
+  CHECK(startup.exhausted());
+  CHECK(startup.next(100000) == HeadInitStep::None);
+  startup.restart(100000);
+  CHECK(startup.next(100000) == HeadInitStep::PowerOff);
+  CHECK(startup.attemptCount() == 1);
+  CHECK(startup.next(100300) == HeadInitStep::PowerOn);
+  CHECK(startup.next(102300) == HeadInitStep::Probe);
+  startup.succeeded();
+  CHECK(!startup.exhausted());
+  CHECK(startup.next(200000) == HeadInitStep::None);
+  startup.restart(0xffffff00u);
+  CHECK(startup.next(0xffffff00u) == HeadInitStep::PowerOff);
+  CHECK(startup.next(0x0000002bu) == HeadInitStep::None);
+  CHECK(startup.next(0x0000002cu) == HeadInitStep::PowerOn);
+  CHECK(startup.next(0x000007fbu) == HeadInitStep::None);
+  CHECK(startup.next(0x000007fcu) == HeadInitStep::Probe);
 }
 
 static void motionTests() {
@@ -158,6 +203,16 @@ static void motionTests() {
   CHECK(!strcmp(visual("searching"), "thinking"));
   CHECK(!strcmp(visual("sleep"), "idle"));
   CHECK(!strcmp(visual("sleepy"), "idle"));
+  CHECK(QuestionAnimation::frameAt(0) == 0);
+  CHECK(QuestionAnimation::frameAt(33) == 0);
+  CHECK(QuestionAnimation::frameAt(34) == 1);
+  CHECK(QuestionAnimation::frameAt(420) == 12);
+  CHECK(QuestionAnimation::frameAt(720) == 21);
+  CHECK(QuestionAnimation::frameAt(1333) == 39);
+  CHECK(QuestionAnimation::frameAt(1334) == 40);
+  CHECK(QuestionAnimation::frameAt(1350) == 40);
+  CHECK(QuestionAnimation::frameAt(60000) == 40);
+  CHECK(QuestionAnimation::frameAt(UINT32_MAX) == 40);
 }
 
 static void protocolTests() {
@@ -273,30 +328,142 @@ static void presentationTests() {
   // Elapsed time cannot turn completion into idle or lower the head.
   HeadPolicy head;
   head.configure(591, 599, true);
-  head.next(0, true, "thinking");
-  CHECK(head.next(350, true, "thinking") == 655);
+  head.next(0, true);
+  CHECK(head.next(350, true) == 655);
   head.succeeded(655);
-  CHECK(head.next(1000, true, "done") == -1);
+  CHECK(head.next(1000, true) == -1);
   for (const uint32_t now : {5999u, 6000u, 60000u, 600000u, 0xffffffffu}) {
     CHECK(!strcmp(policy.state(), "done"));
     CHECK(policy.lastEvent() == done);
-    CHECK(head.next(now, true, policy.state()) == -1);
+    CHECK(head.next(now, true) == -1);
   }
   CHECK(policy.receive(findEventState("thread.idle"), "real-idle", 600));
   CHECK(!strcmp(policy.state(), "idle"));
-  CHECK(head.next(10000, true, policy.state()) == -1);
-  CHECK(head.next(10350, true, policy.state()) == 591);
+  CHECK(head.next(10000, true) == -1);
+  CHECK(head.next(10350, true) == -1);
+  CHECK(head.next(20000, false) == -1);
+  CHECK(head.next(20350, false) == 591);
   CHECK(!policy.receive(nullptr, "bad", 600));
   CHECK(!policy.receive(done, nullptr, 600));
+}
+
+static void approvalAudioTests() {
+  static PresentationPolicy policy;
+  const auto approval = findEventState("approval.requested");
+  const auto thinking = findEventState("reasoning.started");
+  const auto done = findEventState("turn.completed");
+  policy.hello(100);
+  CHECK(policy.approvalSoundGeneration() == 0);
+  CHECK(policy.receive(approval, "live-approval", 101));
+  CHECK(policy.approvalSoundGeneration() == 1);
+  CHECK(policy.receive(approval, "live-approval", 101));
+  CHECK(policy.receive(approval, "still-waiting", 102));
+  CHECK(policy.approvalSoundGeneration() == 1);
+  CHECK(policy.receive(thinking, "resumed", 103));
+  CHECK(policy.receive(approval, "live-approval", 101));
+  CHECK(policy.approvalSoundGeneration() == 1);
+  CHECK(policy.receive(done, "finished", 104));
+  CHECK(policy.receive(approval, "next-approval", 105));
+  CHECK(policy.approvalSoundGeneration() == 2);
+  policy.disconnect();
+  CHECK(!policy.receive(approval, "disconnected", 106));
+  CHECK(policy.approvalSoundGeneration() == 2);
+  policy.hello(200);
+  CHECK(policy.receive(approval, "next-approval", 105));
+  CHECK(policy.approvalSoundGeneration() == 2);
+  policy.hello(300);
+  CHECK(policy.receive(approval, "unknown-snapshot", 300));
+  CHECK(policy.approvalSoundGeneration() == 2);
+  CHECK(policy.receive(approval, "same-wait", 301));
+  CHECK(policy.approvalSoundGeneration() == 2);
+  CHECK(policy.receive(thinking, "new-work", 302));
+  CHECK(policy.receive(approval, "fresh-approval", 303));
+  CHECK(policy.approvalSoundGeneration() == 3);
+
+  EventChimePolicy chime;
+  CHECK(chime.next(false, 0) == ChimeStep::None);
+  CHECK(chime.next(true, 0) == ChimeStep::None);
+  CHECK(chime.next(true, 1) == ChimeStep::Play);
+  CHECK(chime.next(true, 1) == ChimeStep::None);
+  CHECK(chime.next(true, 1) == ChimeStep::None);
+  CHECK(chime.next(false, 1) == ChimeStep::Stop);
+  CHECK(chime.next(false, 1) == ChimeStep::None);
+  CHECK(chime.next(true, 1) == ChimeStep::None);
+  CHECK(chime.next(true, 2) == ChimeStep::Play);
+  CHECK(chime.next(false, 2) == ChimeStep::Stop);
+  CHECK(chime.next(true, 2) == ChimeStep::None);
+  CHECK(chime.next(true, 3) == ChimeStep::Play);
+  CHECK(chime.next(true, 4) == ChimeStep::Play);
+  CHECK(chime.next(false, 4) == ChimeStep::Stop);
+  CHECK(chime.next(false, 5) == ChimeStep::None);
+  CHECK(chime.next(true, 5) == ChimeStep::None);
+  CHECK(chime.next(true, 0xffffffffu) == ChimeStep::Play);
+  CHECK(chime.next(true, 0) == ChimeStep::Play);
+  CHECK(chime.next(false, 0) == ChimeStep::Stop);
+}
+
+static void completionAudioTests() {
+  static PresentationPolicy policy;
+  EventChimePolicy completion;
+  EventChimePolicy approval;
+  const auto done = findEventState("turn.completed");
+  const auto thinking = findEventState("turn.started");
+  const auto waiting = findEventState("approval.requested");
+  const auto error = findEventState("turn.failed");
+
+  policy.hello(100);
+  CHECK(completion.next(false, policy.celebrationGeneration()) == ChimeStep::None);
+  CHECK(policy.receive(done, "old-boot-completion", 99));
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::None);
+  CHECK(policy.receive(thinking, "first-work", 101));
+  CHECK(completion.next(false, policy.celebrationGeneration()) == ChimeStep::None);
+  CHECK(policy.receive(done, "first-completion", 102));
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::Play);
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::None);
+  CHECK(!policy.receive(done, "first-completion", 102));
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::None);
+
+  // Consecutive completed turns still notify even if the UI never drew the next turn's start.
+  CHECK(policy.receive(done, "second-completion", 103));
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::Play);
+  CHECK(policy.receive(waiting, "approval-after-completion", 104));
+  CHECK(approval.next(true, policy.approvalSoundGeneration()) == ChimeStep::Play);
+  CHECK(completion.next(false, policy.celebrationGeneration()) == ChimeStep::Stop);
+  CHECK(policy.receive(done, "completed-after-approval", 105));
+  CHECK(approval.next(false, policy.approvalSoundGeneration()) == ChimeStep::Stop);
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::Play);
+  CHECK(policy.receive(error, "failed-turn", 106));
+  CHECK(completion.next(false, policy.celebrationGeneration()) == ChimeStep::Stop);
+  CHECK(completion.next(false, policy.celebrationGeneration()) == ChimeStep::None);
+  CHECK(policy.receive(thinking, "next-turn", 107));
+  CHECK(!policy.receive(done, "completed-after-approval", 105));
+  CHECK(!strcmp(policy.state(), "thinking"));
+  CHECK(completion.next(false, policy.celebrationGeneration()) == ChimeStep::None);
+
+  CHECK(policy.receive(done, "completion-before-disconnect", 108));
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::Play);
+  policy.disconnect();
+  CHECK(completion.next(false, policy.celebrationGeneration()) == ChimeStep::Stop);
+  policy.hello(200);
+  CHECK(policy.receive(done, "completion-before-disconnect", 108));
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::None);
+  policy.hello(300);
+  CHECK(policy.receive(done, "unknown-reconnect-snapshot", 299));
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::None);
+  CHECK(policy.receive(done, "live-after-reconnect", 301));
+  CHECK(completion.next(true, policy.celebrationGeneration()) == ChimeStep::Play);
 }
 
 void setup() {
   Serial.begin(115200);
   delay(1800);
   headTests();
+  headStartupTests();
   motionTests();
   protocolTests();
   presentationTests();
+  approvalAudioTests();
+  completionAudioTests();
 }
 
 void loop() {

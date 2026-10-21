@@ -1,0 +1,15 @@
+{
+  "preview": "output/permission-question-demo.html",
+  "previewSha256": "885754e1cebcd113ae69898ba0508380801d07f7dc2803950907c4bef9e4a329",
+  "format": "RGB565 big-endian, precomposed on #060e18",
+  "width": 118,
+  "height": 203,
+  "x": 101,
+  "y": 8,
+  "frames": 41,
+  "framesPerSecond": 30,
+  "durationMs": 1350,
+  "afterLanding": "Hold frame 40 until the waiting state ends",
+  "bytes": 1964228,
+  "sha256": "e2e1e5902bd640d11a06149e763eb0596ee6ca5452b2111da691ee840ef7f8a2"
+}

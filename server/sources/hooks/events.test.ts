@@ -4,9 +4,11 @@ import { randomUUID } from "node:crypto";
 import { createHookEventPublisher, isHookEvent, type HookEvent } from "./events";
 import type { StatusMessage } from "../../../src/domain/statusProtocol";
 
-function setup() {
+function setup(runtimeInteractions = false) {
   const out: StatusMessage[] = [];
-  const publisher = createHookEventPublisher((message) => out.push(message));
+  const publisher = createHookEventPublisher((message) => out.push(message), undefined, {
+    runtimeInteractions,
+  });
   const event = (
     name: HookEvent["hook_event_name"],
     fields: Partial<HookEvent> = {},
@@ -233,5 +235,92 @@ test("subagent completion never completes its parent turn", () => {
   state.send("SubagentStop", { agent_id: "b" });
   assert.equal(state.last(), "reasoning.started");
   state.send("Stop");
+  assert.equal(state.last(), "turn.completed");
+});
+
+test("an automatically reviewed permission request does not display a user wait", () => {
+  const state = setup(true);
+  state.send("UserPromptSubmit");
+  state.send("PreToolUse", { tool_name: "Bash", tool_use_id: "long-command" });
+  state.send("PermissionRequest", { tool_name: "Bash" });
+  assert.equal(state.last(), "command.started");
+  assert.equal(state.publisher.status().pendingApprovals, 1);
+  state.publisher.observeInteraction("cli-a", "turn-a", false);
+  assert.equal(state.publisher.status().waitingForUser, false);
+  assert.ok(
+    state.out.every((m) => m.kind !== "agent.event" || m.event.type !== "approval.requested"),
+  );
+});
+
+test("approval response resumes a long command before PostToolUse arrives", () => {
+  const state = setup(true);
+  state.send("UserPromptSubmit");
+  state.send("PreToolUse", { tool_name: "Bash", tool_use_id: "long-command" });
+  state.send("PermissionRequest", { tool_name: "Bash" });
+  state.publisher.observeInteraction("cli-a", "turn-a", true);
+  assert.equal(state.last(), "approval.requested");
+  const emitted = state.out.length;
+  state.publisher.observeInteraction("cli-a", "turn-a", true);
+  assert.equal(state.out.length, emitted);
+  state.publisher.observeInteraction("cli-a", "turn-a", false);
+  assert.equal(state.last(), "command.started");
+  assert.equal(state.publisher.status().activeTools, 1);
+  assert.equal(state.publisher.status().pendingApprovals, 1);
+  assert.equal(state.publisher.status().waitingForUser, false);
+});
+
+test("actual input requests work without a PermissionRequest and preserve another real wait", () => {
+  const state = setup(true);
+  state.send("UserPromptSubmit");
+  state.send("PreToolUse", { tool_name: "request_user_input", tool_use_id: "question" });
+  state.publisher.observeInteraction("cli-a", "turn-a", true);
+  assert.equal(state.last(), "approval.requested");
+  state.send("PostToolUse", { tool_name: "request_user_input", tool_use_id: "question" });
+  assert.equal(state.last(), "approval.requested");
+  state.publisher.observeInteraction("cli-a", "turn-a", false);
+  assert.equal(state.last(), "reasoning.started");
+});
+
+test("stale runtime reads cannot affect a reset, a new turn, or a completed turn", () => {
+  const state = setup(true);
+  state.send("UserPromptSubmit");
+  state.publisher.observeInteraction("cli-a", "turn-a", true);
+  state.send("Stop");
+  assert.equal(state.publisher.observeInteraction("cli-a", "turn-a", false), false);
+  assert.equal(state.last(), "turn.completed");
+  state.send("UserPromptSubmit", { turn_id: "next" });
+  assert.equal(state.publisher.observeInteraction("cli-a", "turn-a", true), false);
+  assert.equal(state.last(), "turn.started");
+  state.publisher.reset("cli-a", "next");
+  assert.equal(state.publisher.observeInteraction("cli-a", "next", true), false);
+  assert.equal(state.last(), "thread.idle");
+});
+
+test("unobservable runtimes fall back to hooks and recover when status becomes available", () => {
+  const state = setup(true);
+  state.send("UserPromptSubmit");
+  state.send("PermissionRequest", { tool_name: "Bash" });
+  state.publisher.observeInteraction("cli-a", "turn-a", null);
+  assert.equal(state.last(), "approval.requested");
+  assert.equal(state.publisher.status().interactionSource, "hooks");
+  state.publisher.observeInteraction("cli-a", "turn-a", false);
+  assert.equal(state.last(), "reasoning.started");
+  assert.equal(state.publisher.status().interactionSource, "runtime");
+});
+
+test("async question remains visible while the model works, then clears on actual user input", () => {
+  const state = setup(true);
+  state.send("UserPromptSubmit");
+  state.send("PreToolUse", { tool_name: "Bash", tool_use_id: "work" });
+  state.publisher.observeInteraction("cli-a", "turn-a", false);
+  state.publisher.observeAsyncInput("cli-a", "turn-a", true);
+  assert.equal(state.last(), "approval.requested");
+  state.publisher.observeInteraction("cli-a", "turn-a", false);
+  assert.equal(state.last(), "approval.requested");
+  state.publisher.observeAsyncInput("cli-a", "turn-a", false);
+  assert.equal(state.last(), "command.started");
+  assert.equal(state.publisher.status().pendingUserInput, false);
+  state.send("Stop");
+  assert.equal(state.publisher.observeAsyncInput("cli-a", "turn-a", true), false);
   assert.equal(state.last(), "turn.completed");
 });

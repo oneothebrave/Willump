@@ -1,23 +1,24 @@
 # Agent Indicator 接力说明
 
-更新日期：2026-10-15。本文供迁移电脑后的使用者及后续开发者接力。
+更新日期：2026-10-20。旧电脑验收与新 Mac 实测状态分别记录，当前结论见下表。本文供迁移电脑后的使用者及后续开发者接力。
 日常安装见 [README](README.md)，功能待办见 [开发计划](docs/development-plan.md)。
+macOS 安装后命令及本轮准备记录见 [macOS 环境准备](docs/macos-setup.md)。
 
 ## 1. 先看当前结论
 
 | 项目 | 当前状态 |
 | --- | --- |
 | 仓库 | [oneothebrave/Willump](https://github.com/oneothebrave/Willump)，分支 `main` |
-| 功能基线 | 事件驱动与完成保持沿用 `ffe7102`；本轮更新威朗普七态及离线叉眼笑脸 |
-| 正式固件 | 源码及现有机器人均为 `2026.10.15-r1`，2026-10-15 已烧录 |
-| 硬件 | 现有 M5StackChan ESP32-S3 rev v0.2，16MB Flash，320×240，Quad PSRAM；旧电脑端口 COM3 |
-| 表情/运动 | 威朗普 willump-led-v3，六种工作表情加离线叉眼笑脸；工作抬头约 20° |
-| 当前阻碍 | 机器人未连接已配置 Wi-Fi，最新串口为 `wifi-retry status=1 saved-wifi=0`；联网回放未完成 |
-| 电脑端运行 | 迁移前交接检查未检测到可用日常 bridge；新电脑需执行 `npm start` |
-| 下一步 | 配置新电脑地址及 Wi-Fi，恢复真实 CLI → bridge → 机器人链路，再做联网验收 |
+| 功能基线 | 事件驱动与完成保持沿用 `ffe7102`；已同步 `38f867f` 的威朗普七态及离线叉眼笑脸 |
+| 正式固件 | 源码及当前机器人为 `2026.10.20-r3`；改为后台连接抬头、断线回平，修复上电初始化并加入有限恢复；沿用问号动画和两种音效；见 [修复记录](docs/head-connection-2026-10-20.md) |
+| 硬件 | M5StackChan ESP32-S3 rev v0.2，16MB Flash，320×240，Quad PSRAM；Mac 串口 `/dev/cu.usbmodem21401`，旧电脑 COM3 |
+| 表情/运动 | 表情与舵机正常；水平 591、自动开关 1；实测连接目标/反馈 655/653，关闭后 591/590，重连后 655/653，ready=1、fault=0、error=0 |
+| 网络连接 | 已连 `DuanWu`，机器人 IP `192.168.3.44`；已与 Mac `192.168.3.49:8787` 完成 hello version=1 并接收 idle 快照 |
+| 电脑端运行 | 已加入真实交互状态与异步问题/回复识别，修复自动审批误报及回复后问号滞留；本轮用户确认问题时显示问号，串口确认回复后立即恢复 running；见 [交互修复](docs/interaction-state-2026-10-20.md) |
+| 本轮验收 | 后台连接抬头、关闭回平、重连抬头三项通过；后台已恢复运行，486 条逻辑断言与 16 条头部模拟检查通过 |
 
 USB 用于烧录和串口，日常事件通过 Wi-Fi 传输。把 USB 接到新电脑不会自动修改固件中的 bridge 地址。
-未确认当前 Wi-Fi 失败原因；不能直接归因为代码缺陷、密码错误或设备故障。
+原网络失败未进一步归因；本次按用户指定的 `DuanWu` 和确认可沿用的密码重新构建设备配置后，Wi-Fi 与 bridge 均连接成功。
 
 ## 2. 离开旧电脑前，单独带走这些本地文件
 
@@ -28,6 +29,9 @@ USB 用于烧录和串口，日常事件通过 Wi-Fi 传输。把 USB 接到新�
 | `firmware/stackchan/include/config.local.h` | Wi-Fi 凭据和电脑地址 | 私下传输，或按模板重新填写；更新 `BRIDGE_HOST` |
 | `.tmp/hardware-backups/stackchan-original-20260906.bin` 及同名 `.sha256` | 原厂完整 Flash 备份 | 单独保留，以便以后回退原厂固件 |
 | `.tmp/hardware-backups/stackchan-pre-20261012.bin` | 本次升级前的完整 Flash 备份 | 单独保留，当前核对大小及摘要见下表 |
+| `.tmp/hardware-backups/stackchan-before-permission-question-icon-20261016.bin` | 问号动画烧录前的 r2 完整备份，16MB | 单独保留；摘要与验证见 [问号动画记录](docs/permission-question-animation.md) |
+| `.tmp/hardware-backups/stackchan-before-turn-completion-audio-20261016.bin` | 完成音效烧录前的 r3 完整备份，16MB | 单独保留；摘要与验证见 [完成音效记录](docs/completion-audio.md) |
+| `.tmp/device-provisioning/active.json` 及其指向的设备构建副本 | 当前 `DuanWu` 设备配置与镜像，含密码 | 私下保留；原项目配置未改，后续重烧录按 macOS 文档使用设备副本 |
 | `.tmp/firmware-validation/`、`.tmp/events/`、`.tmp/stability/` 及烧录/串口日志 | 需要追溯时的本地证据 | 按需单独转移；Git 中仅保留验收结论 |
 
 两份 Flash 备份均为 **16,777,216 字节**；交接时已重新核对 SHA-256：
@@ -37,16 +41,23 @@ USB 用于烧录和串口，日常事件通过 Wi-Fi 传输。把 USB 接到新�
 | 原厂 `stackchan-original-20260906.bin` | `CF4A70019A92946C7D2DE370A002789FF9302C48CA09CFD148D5DCD4C1BD811C` |
 | 升级前 `stackchan-pre-20261012.bin` | `4EA6AA26CE7FA814151F595E56545EAE4B2DFDF74A7F1FAEDAE617A56339AACD` |
 
+2026-10-15 已迁入上述两份备份并核对摘要，另新增当前 `2026.10.13-r1` 的完整 Flash 备份：
+`.tmp/hardware-backups/stackchan-connected-20261015-7c4fadae3008.bin`，16,777,216 字节，
+SHA-256 为 `FACE11B1C8685607A9B021CE76ACA853CFD0A30F47C8795540D8DC9D0FBA5A48`。
+该备份保留烧录前的 `2026.10.13-r1`。随后已使用独立设备构建副本常规烧录 `2026.10.15-r1`，未擦除 NVS 校准。
+
 本地配置、Flash 备份和编译二进制可能含配网信息，不要加入 Git 或上传 GitHub。
 `node_modules/`、`dist/`、`.pio/`、旧 Python 虚拟环境和 PlatformIO 缓存在新电脑重建即可。
 Codex 的账号登录、配置和 hooks 信任需要在新电脑单独确认。
 
 ## 3. 新电脑恢复步骤
 
-以下命令以 **Windows / PowerShell** 为例，这是目前实际验收的平台。
+以下命令以 **Windows / PowerShell** 为例，这是历史完整验收的平台；macOS 命令见上方专门说明。
 旧环境为 Node.js **24.13.0**、npm **11.6.2**、Python **3.13.12**、Codex CLI **0.162.0**。
 先复用这些版本更容易复现结果；升级 Codex 后重新核对 hooks、transcript 和契约。
-非 Windows 的自动 CLI 退出监测会降级，`test:contract` 脚本也依赖 PowerShell，不能照搬为已验收平台。
+非 Windows 的自动 CLI 退出监测会降级。`test:contract` 已改为跨平台 Node 脚本，无需 PowerShell；
+2026-10-14 在 macOS 使用 ChatGPT 内置 Node.js 24.21.0 通过实际 Codex schema 检查，
+这只覆盖两个类型的契约，不能视为完整电脑或设备链路验收。
 
 ### 3.1 克隆和安装
 
@@ -128,6 +139,8 @@ npm run doctor
 
 ## 4. 固件工具与已有校准
 
+源码及实机均为 `2026.10.15-r1`，本次 Mac 使用独立设备构建副本连接 `DuanWu`。原 `config.local.h` 按用户要求保留原样；本机当前设备的构建/上传命令见 [macOS 环境准备](docs/macos-setup.md)。
+
 新电脑重新创建工具环境，所有命令在仓库根目录执行：
 
 ```powershell
@@ -142,12 +155,12 @@ $env:PLATFORMIO_CORE_DIR = "$PWD/.tmp/platformio"
 ```powershell
 .tmp/hardware-venv/Scripts/python.exe -m platformio run -d firmware/stackchan -e status-client
 .tmp/hardware-venv/Scripts/python.exe -m platformio run -d firmware/stackchan -e status-client -t upload --upload-port COM3
-.tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --send v --expect 'firmware version=2026.10.15-r1'
+.tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --send v --expect 'firmware version=2026.10.20-r3'
 ```
 
 本项目只控制 ID 2 俯仰舵机。现有机器人的原厂 zero=599，人工水平 level=591，
-工作目标=655（水平 +64 原始单位，约 20°），稳定门槛 350ms，移动时长 900ms。
-等待、完成和异常保持已有目标；真实 idle 或断线回水平。
+联网目标=655（水平 +64 原始单位，约 20°），稳定门槛 350ms，移动时长 900ms。
+收到合法 hello 后抬头，后台关闭或断线后回水平；所有 Agent 状态都不改变姿态。
 常规上传保留 `indicator-head` NVS；**不要用擦除全部 Flash 来处理普通迁移**。
 搬到另一台电脑不需要重新校准同一个机器人；更换机器人则需人工校准，不能复用 591。
 串口命令、限位、最多 3 次故障重试与显式恢复见 [头部说明](docs/head-motion.md)。
@@ -157,6 +170,8 @@ $env:PLATFORMIO_CORE_DIR = "$PWD/.tmp/platformio"
 完整逻辑测试上传/恢复流程见 [固件 README](firmware/stackchan/README.md)。
 
 ## 5. 已验证什么，尚未验证什么
+
+新 Mac 已于 2026-10-15 完成 `DuanWu` 配网、常规烧录、有效 hello 与 idle 快照验证，见 [网络恢复记录](docs/network-validation-2026-10-15.md)。这不替代真实 CLI、全表情回放或稳定性验收。
 
 最新离线表情及烧录验收为 **2026-10-15**，371 条设备逻辑断言通过，详见 [离线叉眼笑脸验收](docs/offline-validation-2026-10-15.md)。
 本轮完整 Flash 备份为 `.tmp/hardware-backups/stackchan-before-offline-20261015-01.bin`，大小 16,777,216 字节，SHA-256 为 `FACE11B1C8685607A9B021CE76ACA853CFD0A30F47C8795540D8DC9D0FBA5A48`。
@@ -194,7 +209,7 @@ $env:PLATFORMIO_CORE_DIR = "$PWD/.tmp/platformio"
 1. **恢复网络和实际事件。** 确认新电脑 hooks 信任、bridge、设备 Wi-Fi、固件里的 IP；
    采集串口及 `npm run events:capture -- 60` 的脱敏事件，先确认真实 CLI 可驱动设备。
 2. **当前固件联网回放和目视验收。** 检查完成左眼眨一次后长期保持，新事件接管、
-   重复完成不覆盖新状态、重连旧完成快照、真实 idle/断线回平，以及点击调试页。
+   重复完成不覆盖新状态、重连旧完成快照、联网 idle 保持抬头/断线回平，以及点击调试页。
    mock 仅用于受控回放；实机使用 `dev:mock` 前需设置 `AGENT_INDICATOR_HOST=0.0.0.0`，
    开发入口默认只监听 `127.0.0.1`。结束后恢复日常 CLI bridge。
 3. **专项实机验收。** 路由器/Wi-Fi 中断恢复、真实审批拒绝、舵机通信/机械故障保护；

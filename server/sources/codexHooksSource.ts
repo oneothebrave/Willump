@@ -1,9 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { watchTerminalFailures } from "./hooks/terminalFailure";
 import { createCliExitWatcher } from "./hooks/cliExit";
 import { createHookEventPublisher, isHookEvent } from "./hooks/events";
+import { createInteractionWatcher } from "./hooks/interaction";
 import { createAgentEventMessage, normalizeAgentEvent } from "../../src/domain/statusProtocol";
 import type { StatusSource } from "./statusSource";
 
@@ -14,6 +16,7 @@ const REQUEST_TIMEOUT_MS = 2000;
 type HookPublisher = ReturnType<typeof createHookEventPublisher>;
 type FailureWatcher = ReturnType<typeof watchTerminalFailures>;
 type ExitWatcher = ReturnType<typeof createCliExitWatcher>;
+type InteractionWatcher = ReturnType<typeof createInteractionWatcher>;
 type SessionResetRequest = {
   expectedSessionId: string | null;
   expectedTurnId: string | null;
@@ -104,6 +107,7 @@ function handleHookRequest(
   publisher: HookPublisher,
   failureWatcher: FailureWatcher | undefined,
   exitWatcher: ExitWatcher,
+  interactionWatcher: InteractionWatcher,
 ) {
   response.setHeader("Content-Type", "application/json");
 
@@ -120,6 +124,7 @@ function handleHookRequest(
       ...publisher.status(),
       terminalObserver: failureWatcher?.status(),
       cliObserver: exitWatcher.status(),
+      interactionObserver: interactionWatcher.status(),
     });
     return;
   }
@@ -147,25 +152,35 @@ export function createCodexHooksSource(
   let server: ReturnType<typeof createServer> | undefined;
   let stopFailureWatcher: FailureWatcher | undefined;
   let exitWatcher: ExitWatcher | undefined;
+  let interactionWatcher: InteractionWatcher | undefined;
 
   return {
     name: SOURCE_NAME,
     startPublishing(runtime) {
+      const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+      const socketPath = join(codexHome, "app-server-control", "app-server-control.sock");
       const publisher = createHookEventPublisher(
         runtime.sendStatusMessage,
         process.env.AGENT_INDICATOR_HOOK_SESSION_ID,
+        { runtimeInteractions: process.platform !== "win32" && existsSync(socketPath) },
       );
-      const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
       const watcher = createCliExitWatcher(publisher);
       exitWatcher = watcher;
+      const interactions = createInteractionWatcher(
+        socketPath,
+        publisher.status,
+        publisher.observeInteraction,
+      );
+      interactionWatcher = interactions;
       stopFailureWatcher = watchTerminalFailures(
         join(codexHome, "sessions"),
         publisher.status,
         publisher.failTurn,
+        publisher.observeAsyncInput,
       );
 
       server = createServer((request, response) => {
-        handleHookRequest(request, response, publisher, stopFailureWatcher, watcher);
+        handleHookRequest(request, response, publisher, stopFailureWatcher, watcher, interactions);
       });
       server.requestTimeout = REQUEST_TIMEOUT_MS;
       server.headersTimeout = REQUEST_TIMEOUT_MS;
@@ -192,6 +207,7 @@ export function createCodexHooksSource(
     stop() {
       stopFailureWatcher?.();
       exitWatcher?.stop();
+      interactionWatcher?.stop();
       server?.close();
       server?.closeAllConnections();
     },

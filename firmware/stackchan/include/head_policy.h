@@ -1,6 +1,5 @@
 #pragma once
 #include <stdint.h>
-#include <string.h>
 
 // Pure policy: no UART, display, NVS or wall clock. Raw scale is 3.2 units/degree.
 class HeadPolicy {
@@ -78,20 +77,12 @@ class HeadPolicy {
     resetRetry();
   }
 
-  int next(uint32_t now, bool connected, const char* state) {
+  int next(uint32_t now, bool connected) {
     if (level < 0 || faulted() || (!automatic && !manualPending)) {
       return -1;
     }
     if (automatic) {
-      int next = target < 0 ? level : target;
-      if (!connected || !strcmp(state, "idle") || !strcmp(state, "sleep") ||
-          !strcmp(state, "sleepy")) {
-        next = level;
-      } else if (!strcmp(state, "thinking") || !strcmp(state, "running") ||
-                 !strcmp(state, "editing") || !strcmp(state, "tool") ||
-                 !strcmp(state, "searching") || !strcmp(state, "speaking")) {
-        next = level + RISE;
-      }
+      const int next = connected ? level + RISE : level;
       if (desired != next) {
         desired = next;
         changedAt = now;

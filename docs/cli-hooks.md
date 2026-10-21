@@ -25,6 +25,8 @@ codex
 
 CLI 生命周期 hook → `scripts/codex-hook.mjs` → loopback HTTP → Node bridge →
 既有 `agent.event` → 硬件。协议仍只有 `bridge.hello` 和 `agent.event`。
+本机已有 Codex daemon 时，后台另外通过本地 Unix socket 只读查询绑定会话的运行状态，
+并从现有 transcript 增量提取异步问题卡片/用户回复事件；两者共同决定是否真正等待用户。
 
 通知仅携带事件名、会话/轮次/工具身份、时间、工具输入摘要，以及可识别 CLI 的
 PID/创建时间和客户端分类。提示词、命令正文、输出、文件内容、transcript 路径和
@@ -44,8 +46,11 @@ CLI hook 超时配置为 2 秒。Windows 本地身份查询是同步适配器，
 | PreToolUse：Bash | command.started / running |
 | PreToolUse：apply_patch | file.change / editing |
 | 其他工具开始 | tool.started / tool |
-| PermissionRequest | approval.requested / waiting |
-| PostToolUse | 保留其他审批/工具活动，否则 thinking |
+| PermissionRequest | 记录审批候选；有实时状态时不单独判定 waiting |
+| waitingOnApproval / waitingOnUserInput | approval.requested / waiting |
+| 异步问题卡片创建 / 后续用户消息 | waiting / 恢复当前工具活动或 thinking |
+| 实时等待标记清空 | 立即恢复当前活动，不必等待工具执行结束 |
+| PostToolUse | 更新工具活动；保留真正未完成的用户交互 |
 | SubagentStart / SubagentStop | 保留审批/工具优先级；仍有子代理时 tool，否则 thinking |
 | PreCompact / PostCompact | 按当前活动恢复，无工具时 thinking |
 | Stop | turn.completed / done |
@@ -54,10 +59,21 @@ CLI hook 超时配置为 2 秒。Windows 本地身份查询是同步适配器，
 | 绑定 CLI 真实进程退出 | thread.idle / idle，释放会话 |
 
 thinking 表示当前处理阶段，不读取内部推理。editing 表示工具开始，不保证写入成功。
+当前固件 `2026.10.20-r3` 沿用问号落地动画与审批音，并在新的 `turn.completed` 时播放一次 iOS 确认“叮咚”。重复通知和历史重连快照不补播声音，见 [问号动画](permission-question-animation.md)、[审批提示音](approval-audio.md)与[Turn 完成音效](completion-audio.md)。
 Stop 仅表示响应停止，不保证任务成功。CLI 没有托管搜索或逐字输出的完整 hook，
 本来源不伪造 speaking/searching。命令非零退出不直接等同于整轮 error。
 
-审批优先使用调用 ID，缺少 ID 时用会话、轮次、工具和规范化输入的 SHA-256 摘要关联。
+2026-10-20 已修复审批结束后问号滞留及自动审批误报，见 [修复与实测](interaction-state-2026-10-20.md)。
+当前 Mac 上从已有 daemon 每 250ms 只读 `thread/read(includeTurns=false)`，
+只使用绑定会话的状态；不启动、恢复或接管会话，不响应审批/输入请求。
+异步提问不一定设置阻塞等待标记，额外识别当前轮次的类型化问题卡片元数据和后续用户消息。
+不解析问题/回答正文，也不靠时间推断用户已完成交互。历史回放追到文件末尾后才提交状态，避免旧问题闪现。
+
+没有可读 Unix socket、会话不在该 daemon 中或连接失败时，回退 hooks 关联策略；
+Windows 及旧版独立 CLI 当前使用此回退，可能需要等对应工具返回才能确认审批结束。
+`doctor` 和 hooks `/health` 的 `interactionObserver`、`interactionSource` 会显示实际来源及降级状态。
+
+回退时，审批优先使用调用 ID，缺少 ID 时用会话、轮次、工具和规范化输入的 SHA-256 摘要关联。
 同名工具或不同输入不能解除另一条审批；相同输入的并行调用有歧义时保守保持等待。
 无法关联的审批保持到轮次结束，不依据静默超时清除，也不替用户批准。
 
@@ -111,6 +127,8 @@ Invoke-RestMethod http://127.0.0.1:8787/health
 ```
 
 诊断输出服务来源、候选 IPv4、客户端数、最新事件、绑定与两类监听器状态。
+interactionObserver 显示 reading 时表示实时交互读取正常，waitingForUser 才是当前有效等待状态；
+pendingApprovals 是未配对的 hook 记录数，不能单独判断是否还需要用户操作。
 cliObserver 显示 unbound（待活动）、watching（进程已验证）、unidentified、unsupported
 或 degraded。terminalObserver 单独描述 transcript 错误补充监听。
 此前 CLI 退出恢复验证及当前验收边界见 [接力说明](../HANDOFF.md)；

@@ -13,7 +13,7 @@
     "dev:app-server": "tsx server/index.ts --source=codex",
     "hooks:install": "node scripts/install-codex-hooks.mjs",
     "test": "node --import tsx --test server/*.test.ts server/sources/codex/*.test.ts server/sources/hooks/*.test.ts scripts/*.test.mjs",
-    "test:contract": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-codex-contract.ps1",
+    "test:contract": "node scripts/check-codex-contract.mjs",
     "events:capture": "node scripts/capture-status-events.mjs",
     "build": "tsc --noEmit && vite build",
     "format": "prettier --write server src scripts shared \"docs/design/*.html\" index.html package.json tsconfig.json vite.config.ts .prettierrc.json",

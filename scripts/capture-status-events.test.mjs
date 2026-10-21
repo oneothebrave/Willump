@@ -10,6 +10,7 @@ for (const [host, bound, close] of [
   ["0.0.0.0", "127.0.0.1", false],
   ["127.0.0.2", "127.0.0.2", false],
   ["::", "::1", false],
+  ["::1", "::1", false],
   ["127.0.0.1", "127.0.0.1", true],
 ]) {
   test(
@@ -46,8 +47,11 @@ for (const [host, bound, close] of [
       });
       server.listen(0, bound);
       try {
-        await once(server, "listening");
+        await once(wss, "listening");
       } catch (error) {
+        if (bound === "127.0.0.2" && error.code === "EADDRNOTAVAIL") {
+          return context.skip("Alternate IPv4 loopback address unavailable");
+        }
         if (bound === "::1" && ["EAFNOSUPPORT", "EADDRNOTAVAIL"].includes(error.code)) {
           return context.skip("IPv6 unavailable");
         }

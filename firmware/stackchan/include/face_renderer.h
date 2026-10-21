@@ -3,8 +3,13 @@
 #include <math.h>
 #include <string.h>
 #include "face_motion.h"
+#include "question_animation.h"
 
-// Canonical design: docs/design/willump-face-preview.html (study 03).
+extern const uint8_t questionAnimationStart[] asm("_binary_assets_lol_enemy_missing_rgb565_start");
+extern const uint8_t questionAnimationEnd[] asm("_binary_assets_lol_enemy_missing_rgb565_end");
+
+// Base faces: docs/design/willump-face-preview.html (study 03).
+// Approval animation: output/permission-question-demo.html.
 class FaceRenderer {
  public:
   bool begin() {
@@ -16,6 +21,12 @@ class FaceRenderer {
       canvas.setPsram(false);
       ready = canvas.createSprite(320, 240) != nullptr;
     }
+    const bool animationReady = questionAnimationEnd - questionAnimationStart ==
+                                QuestionAnimation::ASSET_BYTES;
+    ready = ready && animationReady;
+    Serial.printf("approval-animation ready=%d frames=%u fps=%lu duration=%lu\n", animationReady,
+                  (unsigned)QuestionAnimation::FRAME_COUNT, (unsigned long)QuestionAnimation::FPS,
+                  (unsigned long)QuestionAnimation::DURATION_MS);
     Serial.printf("face design=%s framebuffer=%d\n", FaceMotion::DESIGN, ready);
     return ready;
   }
@@ -52,7 +63,7 @@ class FaceRenderer {
     } else if (is("running")) {
       running(elapsedSeconds);
     } else if (is("waiting")) {
-      waiting(elapsedSeconds);
+      waiting(now - changedAt);
     } else if (is("error")) {
       error(elapsedSeconds);
     } else {
@@ -194,11 +205,13 @@ class FaceRenderer {
     rect(x - 1, y, 3, 1, INK);
   }
 
-  void waiting(float elapsedSeconds) {
-    const int height = (int)fmaxf(1, lroundf(8 * FaceMotion::blink(elapsedSeconds, 6.8f, 6.29f)));
-    rect(24, 25 - height / 2, 8, height, INK);
-    rect(48, 25 - height / 2, 8, height, INK);
-    rect(29, 41, 22, 2, INK);
+  void waiting(uint32_t elapsedMs) {
+    const size_t frame = QuestionAnimation::frameAt(elapsedMs);
+    const auto* pixels = reinterpret_cast<const lgfx::swap565_t*>(
+        questionAnimationStart + frame * QuestionAnimation::FRAME_BYTES);
+    // Frames already contain the dark background and use display-order RGB565.
+    canvas.pushImage(QuestionAnimation::X, QuestionAnimation::Y, QuestionAnimation::WIDTH,
+                     QuestionAnimation::HEIGHT, pixels);
   }
 
   void error(float elapsedSeconds) {

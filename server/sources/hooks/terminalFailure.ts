@@ -20,6 +20,39 @@ export function hasTerminalFailure(text: string, turnId: string): boolean {
 }
 
 type Binding = { sessionId: string | null; turnId: string | null };
+type AsyncInputCallback = (session: string, turn: string, waiting: boolean) => unknown;
+
+// CLI 0.163.0 emits async question cards as typed AgentMessage metadata and
+// replies/steering as UserMessage. Text, reasoning and tool output are ignored.
+export function asyncInputSignal(text: string, turnId: string) {
+  try {
+    const record = JSON.parse(text);
+    const payload = record.payload;
+    if (
+      record.type !== "event_msg" ||
+      payload?.type !== "item_completed" ||
+      payload.turn_id !== turnId
+    ) {
+      return;
+    }
+    const item = payload.item;
+    if (typeof item?.id !== "string" || !item.id || item.id.length > 256) {
+      return;
+    }
+    if (item.type === "UserMessage") {
+      return { id: item.id, waiting: false };
+    }
+    if (
+      item.type === "AgentMessage" &&
+      Array.isArray(item.questions) &&
+      item.questions.length > 0
+    ) {
+      return { id: item.id, waiting: true };
+    }
+  } catch {
+    // Partial/unsupported records do not change an interaction state.
+  }
+}
 type ObserverState = {
   phase: "unbound" | "searching" | "reading" | "missing" | "ambiguous" | "error" | "stopped";
   lastReadAt: number | null;
@@ -32,7 +65,11 @@ export function createTerminalFailureWatcher(
   root: string,
   getBinding: () => Binding,
   reportFailure: (session: string, turn: string) => unknown,
-  options: { maxRecordBytes?: number; bytesPerPoll?: number } = {},
+  options: {
+    maxRecordBytes?: number;
+    bytesPerPoll?: number;
+    onAsyncInput?: AsyncInputCallback;
+  } = {},
 ) {
   const maxRecordBytes = options.maxRecordBytes ?? 8 * 1024 * 1024;
   const bytesPerPoll = options.bytesPerPoll ?? 4 * 1024 * 1024;
@@ -46,6 +83,8 @@ export function createTerminalFailureWatcher(
   let discardRecord = false;
   let recordBytes = 0;
   let recordParts: Buffer[] = [];
+  let asyncWaiting = false;
+  const seenInputItems = new Set<string>();
   const state: ObserverState = {
     phase: "unbound",
     lastReadAt: null,
@@ -60,6 +99,8 @@ export function createTerminalFailureWatcher(
     recordBytes = 0;
     discardRecord = false;
     failureDelivered = false;
+    asyncWaiting = false;
+    seenInputItems.clear();
   }
 
   async function poll() {
@@ -134,11 +175,16 @@ export function createTerminalFailureWatcher(
               recordParts.push(piece);
             }
             if (byteIndex < bytesRead) {
-              if (
-                !discardRecord &&
-                !failureDelivered &&
-                hasTerminalFailure(Buffer.concat(recordParts).toString("utf8"), turnId)
-              ) {
+              const text = !discardRecord ? Buffer.concat(recordParts).toString("utf8") : "";
+              const input = options.onAsyncInput ? asyncInputSignal(text, turnId) : undefined;
+              if (input && !seenInputItems.has(input.id)) {
+                seenInputItems.add(input.id);
+                if (seenInputItems.size > 512) {
+                  seenInputItems.delete(seenInputItems.values().next().value!);
+                }
+                asyncWaiting = input.waiting;
+              }
+              if (!discardRecord && !failureDelivered && hasTerminalFailure(text, turnId)) {
                 if (isCurrentBinding()) {
                   reportFailure(sessionId, turnId);
                   failureDelivered = true;
@@ -152,6 +198,11 @@ export function createTerminalFailureWatcher(
           }
         }
         if (isCurrentBinding()) {
+          // Commit only the fully caught-up snapshot. Replaying history must
+          // not briefly show old questions which already have a reply.
+          if (offset >= stat.size && recordBytes === 0) {
+            options.onAsyncInput?.(sessionId, turnId, asyncWaiting);
+          }
           state.phase = "reading";
           state.lastReadAt = Date.now();
           if (state.error !== "record_too_large") {
@@ -188,9 +239,12 @@ export function watchTerminalFailures(
   root: string,
   getBinding: () => Binding,
   reportFailure: (session: string, turn: string) => unknown,
+  reportAsyncInput?: AsyncInputCallback,
 ) {
-  const observer = createTerminalFailureWatcher(root, getBinding, reportFailure);
-  const timer = setInterval(() => void observer.poll(), 1000);
+  const observer = createTerminalFailureWatcher(root, getBinding, reportFailure, {
+    onAsyncInput: reportAsyncInput,
+  });
+  const timer = setInterval(() => void observer.poll(), 250);
   timer.unref();
   return Object.assign(
     () => {

@@ -7,6 +7,7 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <M5Unified.h>
+#include "event_chime.h"
 #include "event_states.h"
 #include "face_renderer.h"
 #include "head_motion.h"
@@ -19,11 +20,19 @@
 #include "config.example.h"
 #endif
 
+extern const uint8_t approvalSoundStart[] asm("_binary_assets_lol_enemy_missing_wav_start");
+extern const uint8_t approvalSoundEnd[] asm("_binary_assets_lol_enemy_missing_wav_end");
+extern const uint8_t completionSoundStart[] asm("_binary_assets_ios_payment_success_wav_start");
+extern const uint8_t completionSoundEnd[] asm("_binary_assets_ios_payment_success_wav_end");
+
 namespace {
 WebSocketsClient socket;
 FaceRenderer face;
 HeadMotion head;
 PresentationPolicy presentation;
+EventChimePolicy approvalChime;
+EventChimePolicy completionChime;
+bool speakerReady = false;
 uint32_t displayedCelebration = 0;
 bool debugPage = false;
 uint32_t lastTap = 0;
@@ -52,10 +61,11 @@ struct DisplayState {
   uint32_t ip;
   const char* presentationState;
   uint32_t celebrationGeneration;
+  uint32_t approvalSoundGeneration;
 };
 
 QueueHandle_t displayQueue = nullptr;
-DisplayState displayed = {false, false, 0, nullptr, "Wi-Fi connecting", "-", 0, "offline", 0};
+DisplayState displayed = {false, false, 0, nullptr, "Wi-Fi connecting", "-", 0, "offline", 0, 0};
 
 void publishDisplayState() {
   DisplayState state = {wifiConnected,
@@ -66,7 +76,8 @@ void publishDisplayState() {
                         origin,
                         wifiConnected ? (uint32_t)WiFi.localIP() : 0,
                         presentation.state(),
-                        presentation.celebrationGeneration()};
+                        presentation.celebrationGeneration(),
+                        presentation.approvalSoundGeneration()};
   xQueueOverwrite(displayQueue, &state);
 }
 
@@ -75,6 +86,41 @@ void networkTask(void*);
 void setConnection(const char* label) {
   connectionLabel = label;
   Serial.printf("status-client connection=%s\n", label);
+}
+
+void updateApprovalSound() {
+  const bool waiting = displayed.protocolReady && !strcmp(displayed.presentationState, "waiting");
+  const auto step = approvalChime.next(waiting, displayed.approvalSoundGeneration);
+  if (!speakerReady || step == ChimeStep::None) {
+    return;
+  }
+  if (step == ChimeStep::Stop) {
+    M5.Speaker.stop(0);
+    Serial.println("approval-audio stopped");
+    return;
+  }
+  const size_t soundBytes = approvalSoundEnd - approvalSoundStart;
+  const bool queued = M5.Speaker.playWav(approvalSoundStart, soundBytes, 1, 0, true);
+  Serial.printf("approval-audio cue=lol-enemy-missing generation=%lu queued=%d\n",
+                (unsigned long)displayed.approvalSoundGeneration, queued);
+}
+
+void updateCompletionSound() {
+  const bool completed = displayed.protocolReady && !strcmp(displayed.presentationState, "done");
+  const auto step = completionChime.next(completed, displayed.celebrationGeneration);
+  if (!speakerReady || step == ChimeStep::None) {
+    return;
+  }
+  // A separate channel prevents a late completion stop from cancelling a new approval cue.
+  if (step == ChimeStep::Stop) {
+    M5.Speaker.stop(1);
+    Serial.println("completion-audio stopped");
+    return;
+  }
+  const size_t soundBytes = completionSoundEnd - completionSoundStart;
+  const bool queued = M5.Speaker.playWav(completionSoundStart, soundBytes, 1, 1, true);
+  Serial.printf("completion-audio cue=ios-payment-success generation=%lu queued=%d\n",
+                (unsigned long)displayed.celebrationGeneration, queued);
 }
 
 void draw() {
@@ -179,11 +225,15 @@ void setup() {
   config.internal_imu = false;
   config.internal_rtc = false;
   config.internal_mic = false;
-  config.internal_spk = false;
+  config.internal_spk = true;
   M5.begin(config);
   Serial.begin(115200);
   Serial.printf("firmware version=%s design=%s rise=20deg\n", INDICATOR_FIRMWARE_VERSION,
                 FaceMotion::DESIGN);
+  M5.Speaker.setVolume(EventChimePolicy::VOLUME);
+  speakerReady = M5.Speaker.isEnabled() && M5.Speaker.begin();
+  Serial.printf("approval-audio ready=%d volume=%u\n", speakerReady, EventChimePolicy::VOLUME);
+  Serial.printf("completion-audio ready=%d channel=1\n", speakerReady);
   M5.Display.setRotation(1);
   M5.Display.setBrightness(100);
   if (!face.begin()) {
@@ -217,7 +267,9 @@ void loop() {
     dirty = dirty || latest.presentationState != displayed.presentationState;
     displayed = latest;
   }
-  head.update(displayed.protocolReady, displayed.presentationState);
+  updateApprovalSound();
+  updateCompletionSound();
+  head.update(displayed.protocolReady);
   const bool newCelebration = displayed.celebrationGeneration != displayedCelebration;
   face.update(millis(), displayed.protocolReady, displayed.presentationState, !debugPage,
               newCelebration && !strcmp(displayed.presentationState, "done"));

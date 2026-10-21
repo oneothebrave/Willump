@@ -93,7 +93,11 @@ export function isHookEvent(value: unknown): value is HookEvent {
 }
 
 // Single-session ownership is intentional: other terminals cannot overwrite it.
-export function createHookEventPublisher(send: SendStatusMessage, pinnedSession?: string) {
+export function createHookEventPublisher(
+  send: SendStatusMessage,
+  pinnedSession?: string,
+  options: { runtimeInteractions?: boolean } = {},
+) {
   let session = pinnedSession;
   let turn: string | undefined;
   let failed = false;
@@ -107,6 +111,9 @@ export function createHookEventPublisher(send: SendStatusMessage, pinnedSession?
   let lastHook: string | undefined;
   let accepted = 0;
   let ignored = 0;
+  let runtimeInteractions = options.runtimeInteractions ?? false;
+  let runtimeWaiting: boolean | undefined;
+  let asyncInputWaiting = false;
 
   function remember(set: Set<string>, key: string) {
     set.add(key);
@@ -126,10 +133,19 @@ export function createHookEventPublisher(send: SendStatusMessage, pinnedSession?
     tools.clear();
     waiting.clear();
     subagents.clear();
+    runtimeWaiting = undefined;
+    asyncInputWaiting = false;
+  }
+
+  function waitingForUser() {
+    if (!turn || terminal) {
+      return false;
+    }
+    return asyncInputWaiting || (runtimeInteractions ? runtimeWaiting === true : waiting.size > 0);
   }
 
   function currentActivity(): AgentEventType {
-    if (waiting.size > 0) {
+    if (waitingForUser()) {
       return "approval.requested";
     }
 
@@ -156,7 +172,36 @@ export function createHookEventPublisher(send: SendStatusMessage, pinnedSession?
       activeTools: tools.size,
       pendingApprovals: waiting.size,
       activeSubagents: subagents.size,
+      interactionSource: runtimeInteractions ? "runtime" : "hooks",
+      waitingForUser: waitingForUser(),
+      pendingUserInput: asyncInputWaiting,
     }),
+    observeAsyncInput(sessionId: string, turnId: string, isWaiting: boolean) {
+      if (session !== sessionId || turn !== turnId || terminal) {
+        return false;
+      }
+      const previous = currentActivity();
+      asyncInputWaiting = isWaiting;
+      const next = currentActivity();
+      if (previous !== next) {
+        emit(next, "CLI asynchronous question status changed");
+      }
+      return true;
+    },
+    observeInteraction(sessionId: string, turnId: string, isWaiting: boolean | null) {
+      // An old read must never affect another turn, a reset, or a terminal state.
+      if (session !== sessionId || turn !== turnId || terminal) {
+        return false;
+      }
+      const previous = currentActivity();
+      runtimeInteractions = isWaiting !== null;
+      runtimeWaiting = isWaiting ?? undefined;
+      const next = currentActivity();
+      if (previous !== next) {
+        emit(next, "CLI user-interaction status changed");
+      }
+      return true;
+    },
     failTurn(sessionId: string, turnId: string) {
       if (
         session !== sessionId ||
@@ -250,6 +295,8 @@ export function createHookEventPublisher(send: SendStatusMessage, pinnedSession?
         tools.clear();
         waiting.clear();
         subagents.clear();
+        runtimeWaiting = undefined;
+        asyncInputWaiting = false;
       } else if (event.turn_id) {
         if (turn && turn !== event.turn_id) {
           return ignore();

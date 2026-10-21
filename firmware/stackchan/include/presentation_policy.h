@@ -37,6 +37,17 @@ class PresentationPolicy {
       return false;
     }
 
+    const bool enteringApproval = !strcmp(event->state, "waiting") &&
+                                  (!rawEvent || strcmp(rawEvent->state, "waiting"));
+    if (enteringApproval) {
+      // Reconnect snapshots restore the face silently, even after a reboot.
+      const bool oldSnapshot = firstEvent && at <= helloAt;
+      if (!oldSnapshot && strcmp(lastApprovalId, id)) {
+        ++approvalGeneration;
+      }
+      strcpy(lastApprovalId, id);
+    }
+
     rawEvent = event;
     if (completed) {
       if (!duplicate) {
@@ -64,12 +75,18 @@ class PresentationPolicy {
     return animationGeneration;
   }
 
+  uint32_t approvalSoundGeneration() const {
+    return approvalGeneration;
+  }
+
  private:
   bool connected = false;
   bool awaitingSnapshot = false;
   double helloAt = 0;
   uint32_t animationGeneration = 0;
+  uint32_t approvalGeneration = 0;
   const EventState* rawEvent = nullptr;
+  char lastApprovalId[MAX_EVENT_ID_BYTES + 1] = {};
   char completions[REMEMBERED_COMPLETIONS][MAX_EVENT_ID_BYTES + 1] = {};
   size_t nextCompletion = 0;
   size_t completionCount = 0;

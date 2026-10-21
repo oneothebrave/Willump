@@ -99,6 +99,7 @@ export function createDiagnosticReporter(write = report) {
   return (status) => {
     const observer = status.hooks?.terminalObserver;
     const cliObserver = status.hooks?.cliObserver;
+    const interactionObserver = status.hooks?.interactionObserver;
     const key = JSON.stringify([
       status.bridgeOK,
       status.hooksOK,
@@ -107,6 +108,8 @@ export function createDiagnosticReporter(write = report) {
       observer?.error,
       cliObserver?.phase,
       cliObserver?.error,
+      interactionObserver?.phase,
+      interactionObserver?.error,
     ]);
     if (key === previous) {
       return;
@@ -162,6 +165,16 @@ function report(status) {
     console.log(
       `[CLI 退出监听] ${labels[observer.phase] ?? observer.phase}${observer.error ? `；${observer.error}` : ""}。`,
     );
+  }
+  if (status.hooksOK && status.hooks.interactionObserver) {
+    const observer = status.hooks.interactionObserver;
+    const label =
+      observer.phase === "reading"
+        ? "读取 Codex 真实交互状态"
+        : observer.phase === "unbound"
+          ? "等待 CLI 活动"
+          : `实时状态不可用，使用 hooks；${observer.phase}${observer.error ? `；${observer.error}` : ""}`;
+    console.log(`[交互状态监听] ${label}。`);
   }
 }
 
