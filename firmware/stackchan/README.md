@@ -1,12 +1,15 @@
 # StackChan 固件
 
 目标设备 M5StackChan ESP32-S3，320×240 横屏、16MB Flash、Quad PSRAM。
-当前源码及设备固件为 `2026.10.20-r3`，默认环境为 status-client。
+当前源码及设备固件为 `2026.10.26-r1`，默认环境为 status-client。
+启动和读取重试不再切断舵机 VM，开机未连接时不主动回平，合法连接立即优先抬头。
+两种关机姿态和工作状态的真机验收见 [重启修复记录](../../docs/head-reboot-2026-10-26.md)。
+当前 Mac 使用固定 `.local` 主机名连接，修复 DHCP 地址变化后机器找不到后台的问题，见 [连接记录](../../docs/bridge-hostname-2026-10-25.md)。
 后台协议连接成功后抬头，后台关闭或断线后回水平；加入有限启动恢复与失败后的串口诊断。
 沿用 turn 完成时的 iOS 确认“叮咚”、《英雄联盟》问号动画与审批音。
-486 条本机逻辑断言及 16 条头部驱动模拟检查全部通过。舵机通信已恢复，后台连接、关闭、重连的实际运动均已验证，见 [修复记录](../../docs/head-connection-2026-10-20.md)。
+491 条本机逻辑断言及 77 条头部驱动模拟检查全部通过。此前后台连接、关闭、重连的实际运动验证见 [历史记录](../../docs/head-connection-2026-10-20.md)。
 USB 用于烧录/串口，日常状态通过 Wi-Fi WebSocket 获取；电脑端运行 `npm start` 和普通 Codex CLI。
-本轮烧录与回归依据见 [Turn 完成音效](../../docs/completion-audio.md)，此前问号更新见 [问号动画](../../docs/permission-question-animation.md)与[审批提示音](../../docs/approval-audio.md)。
+音效更新历史见 [Turn 完成音效](../../docs/completion-audio.md)，此前问号更新见 [问号动画](../../docs/permission-question-animation.md)与[审批提示音](../../docs/approval-audio.md)。
 换电脑的配置、工具恢复和备份信息见 [HANDOFF.md](../../HANDOFF.md)。
 
 ## 正式行为
@@ -34,14 +37,18 @@ editing/tool 使用执行造型，searching/speaking 使用思考，sleepy/sleep
 重连首个完成快照仍展示 done，不会替换为 idle；新实时完成可重置左眼庆祝。
 
 头部策略只控制 ID 2，水平基准本机为 591、联网时为 655（约 20°）。
-收到合法 hello 后抬头，后台关闭或断线后回平；目标稳定 350ms，移动时长 900ms。
+收到合法 hello 后立即请求抬头；开机未收到第一次 hello 时保持当前姿态。
+已有合法连接后，后台关闭或断线稳定 350ms 才回平；移动时长 900ms。
 空闲、等待、完成等事件不再控制头部。无有效校准不运动。
 限位、最多 3 次故障重试和串口命令见 [头部说明](../../docs/head-motion.md)。
 
 ## 配置与协议
 
 仅消费版本 1 的 bridge.hello 与 agent.event；13 个事件和 TypeScript 映射一致。
-连接 `ws://<电脑局域网IP>:8787/status`，不能填写 127.0.0.1 或 0.0.0.0。
+连接 `ws://<电脑局域网IP或.local主机名>:8787/status`，不能填写 127.0.0.1 或 0.0.0.0。
+本机已配网设备的 `BRIDGE_HOST` 为 `larrys-mac-mini.local`。当前 ESP32-S3 网络库已启用 mDNS 查询，
+WebSocket 重连时通过主机名解析地址；电脑与机器人需处于允许 mDNS 的同一局域网。
+启动串口日志会打印目标主机名和端口，便于核对实际烧录的配置。
 Wi-Fi 每 15 秒重试，WebSocket 每 3 秒重连并检测心跳；须收到合法 hello 才接收事件。
 网络掉线覆盖为 offline，不当成 Agent error。
 

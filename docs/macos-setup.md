@@ -88,6 +88,35 @@ Windows 专用测试在 macOS 上可能跳过，记录实际结果，不沿用�
 
 ## 日常 bridge 和真实事件
 
+### willump 快捷命令
+
+在已安装 Homebrew 的 macOS 上，一次安装：
+
+```sh
+cd /Users/larry/Documents/Projects/Willump
+ln -s "$PWD/scripts/willump" "$(brew --prefix)/bin/willump"
+```
+
+Homebrew 的 `bin` 目录须已在终端 PATH 中。本机链接为 `/opt/homebrew/bin/willump`。
+以后在任意目录运行：
+
+```sh
+willump
+```
+
+脚本会定位项目目录，再执行 `npm start`；保持终端运行，按 `Ctrl+C` 停止。
+原有的后台健康检查、已运行实例复用和端口检查均沿用。
+也可以运行 `willump --check` 检查状态，或 `willump --reset` 释放会话（等同于 `npm run session:reset`）。
+若移动项目目录，需重新建立该软链接。
+
+移除快捷命令：
+
+```sh
+rm "$(brew --prefix)/bin/willump"
+```
+
+### 使用 npm 启动
+
 终端一保持运行：
 
 ```sh
@@ -118,14 +147,16 @@ macOS 也不能可靠识别交互 CLI 与 Desktop/app-server/exec；默认会绑
 
 ```sh
 export PLATFORMIO_CORE_DIR="$PWD/.tmp/platformio"
-DEVICE_PROJECT="$PWD/.tmp/device-provisioning/turn-completion-audio-20261016/stackchan"
+DEVICE_PROJECT="$PWD/.tmp/device-provisioning/head-reboot-20261026-r1/stackchan"
 .tmp/hardware-venv/bin/python -m platformio run -d "$DEVICE_PROJECT" -e status-client
 .tmp/hardware-venv/bin/python -m platformio run -d "$DEVICE_PROJECT" -e status-client -t upload --upload-port /dev/cu.usbmodem21401
 ```
 
-该副本使用精确 SSID `DuanWu`、bridge `192.168.3.49:8787`，密码只在本机设备配置与镜像中。
+该副本使用精确 SSID `DuanWu`、bridge `larrys-mac-mini.local:8787`，密码只在本机设备配置与镜像中。
 原项目 `firmware/stackchan/include/config.local.h` 仍是原内容，后续重烧录当前设备请使用此副本。
-当前副本沿用原设备配置，包含 `2026.10.16-r4` turn 完成音效、问号落地动画及审批音；后续升级源码时，在新的构建副本沿用设备配置后重新构建。
+当前副本为 `2026.10.26-r1`，修复重启后姿态及舵机启动恢复，沿用固定主机名、turn 完成音效、问号落地动画及审批音；见 [真机验收](head-reboot-2026-10-26.md)。后续升级源码时，在新的构建副本沿用设备配置后重新构建。
+2026-10-25 电脑 DHCP 地址由 `192.168.3.49` 变为 `192.168.3.47`，后台正常但机器仍连接旧 IP。
+已改用固定主机名恢复连接；根目录运行 `willump` 的启动脚本正常，详见 [连接修复](bridge-hostname-2026-10-25.md)。
 迁移电脑时私下保留设备配置并重建工具缓存，配置和镜像不提交 Git。
 
 ## 固件工具与设备接入
@@ -148,18 +179,21 @@ export PLATFORMIO_CORE_DIR="$PWD/.tmp/platformio"
 之后每个执行固件命令的终端都需设置同样的 `PLATFORMIO_CORE_DIR`。
 macOS USB 串口通常为 `/dev/cu.usbmodem…` 或 `/dev/cu.usbserial…`，以端口列表为准，不能沿用 COM3。
 
-本次实际局域网网卡 `en1` 的 IPv4 为 `192.168.3.49`；网络变化后再次确认：
+2026-10-25 实际局域网网卡 `en1` 的 IPv4 为 `192.168.3.47`；网络变化后可再次确认：
 
 ```sh
 ipconfig getifaddr en1
 ```
 
-将确认后的实际局域网地址写入本地 `firmware/stackchan/include/config.local.h` 的 `BRIDGE_HOST`，
-只填 IP。本次虚拟网卡地址 `198.18.0.1` 不用于机器人连接。
+新设备的 `BRIDGE_HOST` 可填写确认后的局域网 IP，或优先使用本机固定的 `.local` 主机名。
+使用 `scutil --get LocalHostName` 获取 Mac 主机名，再加 `.local`；本机为 `larrys-mac-mini.local`。
+主机名不包含 `ws://`、端口或 `/status`；当前已配网设备按上文使用独立构建副本。
+虚拟网卡地址 `198.18.0.1` 不用于机器人连接。
 在本地填写 2.4GHz Wi-Fi 凭据；只有确认设备已保存有效配置时才使用 `USE_SAVED_WIFI=true`。
 电脑与机器人须可互访，防火墙允许机器人访问 TCP 8787。
 
-地址或配网配置变化后，需重新构建并烧录 `status-client`。接入设备并确认串口后，
+主机名、端口或配网配置变化后，需重新构建并烧录 `status-client`；固定主机名不变时，
+DHCP 分配的电脑 IP 变化无需重新烧录。接入设备并确认串口后，
 将下方示例端口替换为端口列表中的实际值：
 
 ```sh

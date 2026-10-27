@@ -287,6 +287,7 @@ void networkTask(void*) {
   socket.onEvent(onSocketEvent);
   socket.setReconnectInterval(3000);
   socket.enableHeartbeat(15000, 3000, 2);
+  Serial.printf("status-client bridge=%s:%u\n", BRIDGE_HOST, BRIDGE_PORT);
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   if (USE_SAVED_WIFI) {

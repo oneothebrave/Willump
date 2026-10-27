@@ -1,34 +1,35 @@
 #pragma once
 #include <stdint.h>
 
-enum class HeadInitStep { None, PowerOff, PowerOn, Probe };
+enum class HeadInitStep { None, PowerOn, Probe };
 
 // Bounded recovery for startup communication failures, independent of motion faults.
 class HeadStartupPolicy {
  public:
   static constexpr int MAX_ATTEMPTS = 3;
-  static constexpr uint32_t POWER_OFF_MS = 300;
-  // This unit does not reply at 700ms after VM rises; allow a full boot before probing.
+  // Keep VM on across probes; resetting it after a timeout can prevent a slow boot.
   static constexpr uint32_t WARMUP_MS = 2000;
-  static constexpr uint32_t RETRY_MS = 1000;
+  static constexpr uint32_t RETRY_MS = 2000;
 
   void restart(uint32_t now) {
     attempts = 0;
     changedAt = now;
-    phase = Phase::NeedPowerOff;
+    phase = Phase::NeedPowerOn;
+    retryPower = false;
   }
 
   HeadInitStep next(uint32_t now) {
     if (phase == Phase::RetryWait && now - changedAt >= RETRY_MS) {
-      phase = Phase::NeedPowerOff;
+      if (retryPower) {
+        phase = Phase::NeedPowerOn;
+      } else {
+        ++attempts;
+        phase = Phase::AwaitResult;
+        return HeadInitStep::Probe;
+      }
     }
-    if (phase == Phase::NeedPowerOff) {
+    if (phase == Phase::NeedPowerOn) {
       ++attempts;
-      phase = Phase::OffWait;
-      changedAt = now;
-      return HeadInitStep::PowerOff;
-    }
-    if (phase == Phase::OffWait && now - changedAt >= POWER_OFF_MS) {
       phase = Phase::OnWait;
       changedAt = now;
       return HeadInitStep::PowerOn;
@@ -44,8 +45,9 @@ class HeadStartupPolicy {
     phase = Phase::Ready;
   }
 
-  void failed(uint32_t now) {
+  void failed(uint32_t now, bool powerAvailable = true) {
     changedAt = now;
+    retryPower = !powerAvailable;
     phase = attempts >= MAX_ATTEMPTS ? Phase::Failed : Phase::RetryWait;
   }
 
@@ -58,8 +60,9 @@ class HeadStartupPolicy {
   }
 
  private:
-  enum class Phase { Dormant, NeedPowerOff, OffWait, OnWait, AwaitResult, RetryWait, Ready, Failed };
+  enum class Phase { Dormant, NeedPowerOn, OnWait, AwaitResult, RetryWait, Ready, Failed };
   Phase phase = Phase::Dormant;
   uint32_t changedAt = 0;
   int attempts = 0;
+  bool retryPower = false;
 };

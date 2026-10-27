@@ -5,6 +5,6 @@
 constexpr bool USE_SAVED_WIFI = true;
 constexpr char WIFI_SSID[] = "";
 constexpr char WIFI_PASSWORD[] = "";
-// Computer LAN address only: no ws:// prefix or /status suffix.
+// Computer LAN IPv4 or mDNS name (e.g. my-mac.local); no ws:// or /status.
 constexpr char BRIDGE_HOST[] = "192.168.1.100";
 constexpr uint16_t BRIDGE_PORT = 8787;

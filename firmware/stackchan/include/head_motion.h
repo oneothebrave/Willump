@@ -17,9 +17,11 @@ class HeadMotion {
   bool ready = false;
   bool configured = false;
   bool uartReady = false;
+  bool powerReady = false;
   bool connectedBefore = false;
   int lastPosition = -1;
   int lastError = 0;
+  uint32_t lastProbeAt = 0;
 
   bool save(bool enabled, bool saveLevel = false) {
     Preferences prefs;
@@ -67,55 +69,62 @@ class HeadMotion {
     Serial.printf("head target=%d from=%d duration=900ms\n", pos, current);
   }
 
+  void probe(uint32_t now) {
+    lastProbeAt = now;
+    lastPosition = bus.ReadPos(2);
+    lastError = bus.getLastError();
+    const int status = bus.getState();
+    if (!HeadPolicy::valid(lastPosition) || lastError || status) {
+      if (!startup.exhausted()) {
+        startup.failed(now);
+      }
+      Serial.printf("head init probe raw=%d error=%d status=%d attempt=%d/%d exhausted=%d\n",
+                    lastPosition, lastError, status, startup.attemptCount(),
+                    HeadStartupPolicy::MAX_ATTEMPTS, startup.exhausted());
+      return;
+    }
+    startup.succeeded();
+    ready = true;
+    Serial.printf("head ready raw=%d factory-zero=%d level=%d automatic=%d rise=20deg\n",
+                  lastPosition, zero, policy.horizontal(), policy.enabled());
+  }
+
   void initialize(uint32_t now) {
     const auto step = startup.next(now);
     if (step == HeadInitStep::None) {
+      // Read-only recovery discovers a late-ready servo without dropping VM.
+      // Motion retries remain independently bounded by HeadPolicy.
+      if (startup.exhausted() && uartReady && powerReady &&
+          now - lastProbeAt >= HeadStartupPolicy::RETRY_MS) {
+        probe(now);
+      }
       return;
     }
-    if (step == HeadInitStep::PowerOff) {
-      // Establish an idle UART line before powering the servos back on.
+    if (step == HeadInitStep::PowerOn) {
+      // Establish idle UART before enabling VM, preserving an already-powered pose.
       if (!uartReady) {
         uartReady = bus.begin(UART_NUM_1, 1000000, 6, 7);
         bus.IOTimeOut = 20;
       }
       if (!uartReady || !power.begin()) {
-        startup.failed(now);
+        startup.failed(now, false);
         Serial.printf("head init unavailable uart=%d attempt=%d/%d\n", uartReady,
                       startup.attemptCount(), HeadStartupPolicy::MAX_ATTEMPTS);
         return;
       }
       power.setDriveMode(0, false);
-      if (!power.setDirection(0, true) || !power.setPullMode(0, m5::IOExpander_Base::pull_up) ||
-          !power.digitalWrite(0, false)) {
-        startup.failed(now);
-        Serial.println("head init power-off-failed");
-        return;
-      }
-      Serial.printf("head init attempt=%d/%d phase=power-off\n", startup.attemptCount(),
-                    HeadStartupPolicy::MAX_ATTEMPTS);
-    } else if (step == HeadInitStep::PowerOn) {
-      if (!power.digitalWrite(0, true)) {
-        startup.failed(now);
+      // Set the output latch before direction so it never briefly drives VM low.
+      powerReady = power.digitalWrite(0, true) && power.setDirection(0, true) &&
+                   power.setPullMode(0, m5::IOExpander_Base::pull_up);
+      if (!powerReady) {
+        startup.failed(now, false);
         Serial.println("head init power-on-failed");
         return;
       }
-      Serial.println("head init phase=warming");
+      Serial.printf("head init attempt=%d/%d phase=warming vm=on\n", startup.attemptCount(),
+                    HeadStartupPolicy::MAX_ATTEMPTS);
     } else if (step == HeadInitStep::Probe) {
-      lastPosition = bus.ReadPos(2);
-      lastError = bus.getLastError();
-      const int status = bus.getState();
-      if (!HeadPolicy::valid(lastPosition) || lastError || status) {
-        startup.failed(now);
-        Serial.printf("head init probe raw=%d error=%d status=%d attempt=%d/%d exhausted=%d\n",
-                      lastPosition, lastError, status, startup.attemptCount(),
-                      HeadStartupPolicy::MAX_ATTEMPTS, startup.exhausted());
-        return;
-      }
-      startup.succeeded();
-      policy.configure(policy.horizontal(), zero, policy.enabled());
-      ready = true;
-      Serial.printf("head ready raw=%d factory-zero=%d level=%d automatic=%d rise=20deg\n",
-                    lastPosition, zero, policy.horizontal(), policy.enabled());
+      probe(now);
     }
   }
 
@@ -162,6 +171,7 @@ class HeadMotion {
 
   void update(bool connected) {
     const uint32_t now = millis();
+    policy.observeConnection(connected);
     if (connected != connectedBefore) {
       connectedBefore = connected;
       Serial.printf("head bridge=%s\n", connected ? "connected" : "disconnected");

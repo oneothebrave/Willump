@@ -1,0 +1,26 @@
+#!/bin/bash
+set -euo pipefail
+
+# Resolve the installed symlink before locating the project.
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+  LINK_TARGET="$(readlink "$SCRIPT_PATH")"
+  case "$LINK_TARGET" in
+    /*) SCRIPT_PATH="$LINK_TARGET" ;;
+    *) SCRIPT_PATH="$SCRIPT_DIR/$LINK_TARGET" ;;
+  esac
+done
+PROJECT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+
+if ! command -v npm >/dev/null 2>&1; then
+  printf '%s\n' '未找到 npm。请先安装 Node.js，并确认终端可以运行 npm。' >&2
+  exit 127
+fi
+
+cd "$PROJECT_DIR"
+if [[ "${1:-}" == "--reset" ]]; then
+  shift
+  exec npm run session:reset -- "$@"
+fi
+exec npm start -- "$@"

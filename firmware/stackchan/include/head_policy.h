@@ -25,6 +25,7 @@ class HeadPolicy {
     desired = -1;
     torque = false;
     manualPending = false;
+    sawConnection = false;
     resetRetry();
   }
 
@@ -77,15 +78,25 @@ class HeadPolicy {
     resetRetry();
   }
 
+  void observeConnection(bool connected) {
+    sawConnection = sawConnection || connected;
+  }
+
   int next(uint32_t now, bool connected) {
+    observeConnection(connected);
     if (level < 0 || faulted() || (!automatic && !manualPending)) {
       return -1;
     }
     if (automatic) {
+      if (!connected && !sawConnection) {
+        // No hello yet is startup, not evidence that an established bridge was lost.
+        return -1;
+      }
       const int next = connected ? level + RISE : level;
       if (desired != next) {
         desired = next;
-        changedAt = now;
+        // Raising preempts downward motion; only lowering waits for stability.
+        changedAt = connected ? now - SETTLE_MS : now;
       }
     }
     if (!safe(desired) || (desired == target && torque) || now - changedAt < SETTLE_MS) {
@@ -117,6 +128,7 @@ class HeadPolicy {
   bool automatic = false;
   bool torque = false;
   bool manualPending = false;
+  bool sawConnection = false;
   uint32_t changedAt = 0;
   uint32_t lastFailure = 0;
 

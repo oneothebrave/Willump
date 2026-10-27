@@ -59,7 +59,7 @@ CLI hook 超时配置为 2 秒。Windows 本地身份查询是同步适配器，
 | 绑定 CLI 真实进程退出 | thread.idle / idle，释放会话 |
 
 thinking 表示当前处理阶段，不读取内部推理。editing 表示工具开始，不保证写入成功。
-当前固件 `2026.10.20-r3` 沿用问号落地动画与审批音，并在新的 `turn.completed` 时播放一次 iOS 确认“叮咚”。重复通知和历史重连快照不补播声音，见 [问号动画](permission-question-animation.md)、[审批提示音](approval-audio.md)与[Turn 完成音效](completion-audio.md)。
+当前固件 `2026.10.26-r1` 沿用问号落地动画与审批音，并在新的 `turn.completed` 时播放一次 iOS 确认“叮咚”。重复通知和历史重连快照不补播声音，见 [问号动画](permission-question-animation.md)、[审批提示音](approval-audio.md)与[Turn 完成音效](completion-audio.md)。
 Stop 仅表示响应停止，不保证任务成功。CLI 没有托管搜索或逐字输出的完整 hook，
 本来源不伪造 speaking/searching。命令非零退出不直接等同于整轮 error。
 

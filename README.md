@@ -1,258 +1,211 @@
-# Agent Indicator
+# Willump
 
-正常使用终端里的 Codex CLI，让 M5StackChan ESP32-S3 同步显示工作状态，并在后台连接成功后抬头。
+**English** · [简体中文](README.zh-CN.md)
 
-数据流：Codex hooks → 8788 → 后台处理 → 8787 → 机器人。
-电脑端通过 CLI hooks 接收真实生命周期事件，由 Node bridge 转换为统一 WebSocket 协议；
-机器人通过 Wi-Fi 接收事件，在本地绘制动画并控制头部。浏览器是可选的协议模拟器，
-日常使用不需要打开网页，也不需要由 bridge 另行提交测试 prompt。
-
-**换电脑接力先看 [HANDOFF.md](HANDOFF.md)**：当前状态、本地文件迁移、重新安装 hooks、
-设备地址更新、验证结果和下一步均已整理。
-macOS 安装后命令与本轮准备记录见 [macOS 环境准备](docs/macos-setup.md)。
-
-## 当前实现
-
-当前源码及设备固件为 `2026.10.16-r4`，目标硬件为 M5StackChan ESP32-S3。
-等待审批时播放《英雄联盟》问号落地动画，落地后保持问号，并播放一次现有问号音效；见 [问号动画与验证记录](docs/permission-question-animation.md)。
-每个新 turn 完成时播放一次 iOS App Store Face ID 确认“叮咚”，重复完成和历史快照不补响；见 [Turn 完成音效](docs/completion-audio.md)。
-表情基线 `2026.10.15-r1` 的 371 条设备逻辑断言及烧录记录见 [前次记录](docs/offline-validation-2026-10-15.md)。
-
-新 Mac 已烧录 `2026.10.16-r4`、`willump-led-v3`，机器人已连接 `DuanWu` 并与 bridge 完成握手。
-本次使用独立设备配置，原本地 Wi-Fi 文件与 Mac 网络设置保留，见 [网络恢复记录](docs/network-validation-2026-10-15.md)。
-
-- 威朗普 willump-led-v3：空闲、思考、执行、等待、完成、异常，以及连接离线表现。
-- 后台连接成功后抬头约 20°，后台关闭或断线后回水平；具体 Agent 状态不改变姿态。
-- 完成后保持笑眼和已有头部目标，直到收到新事件；状态不按时间自动变为空闲。
-- 点击屏幕可切换表情页和调试页；断线显示离线动画并自动重连。
-- CLI 会话隔离、并行工具与审批等待映射、终止错误补充监听，以及 Windows CLI 退出恢复。
-- 等待审批时显示金色问号落地、回弹与地面波纹，随后保持问号；新审批播放一次《英雄联盟》问号音效。
-- 新 turn 完成时播放一次 iOS 确认音效，与审批音分别控制播放。
-- 本地诊断、显式会话释放、脱敏事件采集和连续采样。
+Willump turns Codex CLI activity into an animated, physical status companion on an M5StackChan
+ESP32-S3. It shows the current agent state, plays approval and completion cues, and raises its head
+while the local bridge is connected.
 
 ```text
-交互式 Codex CLI
-  → 生命周期 hooks / 本地终止错误补充监听
-  → Node bridge
-  → WebSocket：bridge.hello + agent.event
-      ├→ StackChan：本地动画 + 头部姿态
-      └→ 浏览器协议模拟器（可选）
+Codex CLI hooks
+  → local hook receiver (127.0.0.1:8788)
+  → Node.js bridge
+  → WebSocket status stream (:8787/status)
+      ├→ M5StackChan: face, sound, and head motion
+      └→ optional browser simulator
 ```
 
-## 快速开始
+The current firmware is `2026.10.26-r1`. The latest reboot and head-motion validation is recorded in
+[docs/head-reboot-2026-10-26.md](docs/head-reboot-2026-10-26.md). For machine migration, private
+device files, and the latest handoff state, see [HANDOFF.md](HANDOFF.md).
 
-下方以 Windows / PowerShell 为例，历史验收环境使用 Node.js 24.13.0、npm 11.6.2。
-macOS 使用 Node.js 24，命令及自动 CLI 退出检测限制见 [macOS 环境准备](docs/macos-setup.md)。
-需要已安装并可正常运行的 Codex CLI，且该版本支持项目使用的 hooks。
-机器人与电脑须处于可互访的局域网，机器人接入 2.4GHz Wi-Fi。
+## Features
 
-### 1. 安装依赖和通知 hooks
+- Seven visual states: idle, thinking, running, waiting, done, error, and offline.
+- A falling gold question-mark animation and one approval cue for a real user wait.
+- A one-shot completion chime for each new completed turn; reconnect snapshots stay silent.
+- Session and turn isolation, parallel-tool tracking, approval/input recovery, and terminal-error
+  detection without forwarding prompt or file contents.
+- Connection-driven head motion: preserve the current pose before the first valid hello, raise the
+  head immediately when connected, and return to level only after a real disconnect.
+- Local diagnostics, explicit session reset, redacted event capture, and long-running stability
+  sampling.
+- A browser simulator for protocol development; it is not required for daily use.
 
-在项目根目录执行；以下路径是本机示例，可替换为实际检出目录：
+## Requirements
 
-```powershell
-cd E:\AgentIndicator
+- Node.js 24 and npm.
+- A Codex CLI version with hooks support.
+- M5StackChan ESP32-S3 with 16 MB flash and Quad PSRAM.
+- A mutually reachable local network; the device uses 2.4 GHz Wi-Fi.
+- PlatformIO and esptool only when building, backing up, or flashing firmware.
+
+## Quick start
+
+### 1. Install dependencies and hooks
+
+```sh
+git clone https://github.com/oneothebrave/Willump.git
+cd Willump
 npm ci
 npm run hooks:install
 ```
 
-默认将通知定义合并到本项目的 `.codex/hooks.json`，保留其他处理器，并在内容变化时备份。
-随后在本项目目录启动 Codex CLI，通过 `/hooks` 审核并信任通知定义。
-配置文件存在不代表 CLI 已信任它。
+The installer merges project-local notifications into `.codex/hooks.json` and preserves unrelated
+handlers. Start Codex in this repository, open `/hooks`, and review and trust the definitions. A
+configuration file on disk does not mean the hooks have been trusted.
 
-如果希望在其他项目中使用 Codex 时也同步机器人，改用用户级安装。
-若已经执行过上面的项目级安装，先移除本项目这一份，避免重复通知：
+To drive Willump while Codex is running in other repositories, use a user-level installation instead:
 
-```powershell
+```sh
 npm run hooks:install -- --uninstall
 npm run hooks:install -- --global
 ```
 
-用户级定义写入 `CODEX_HOME` 下的 `hooks.json`，未指定时使用用户目录的 `.codex`。
-同样需要在 CLI 中审核信任。移动本仓库或更换 Node 路径后，检查旧定义并重新安装。
-完整接入说明见 [CLI hooks](docs/cli-hooks.md)。
+Reinstall hooks after moving this repository or changing the Node.js path. See
+[docs/cli-hooks.md](docs/cli-hooks.md) for lifecycle, privacy, and fallback behavior.
 
-### 2. 启动电脑端
+### 2. Start the bridge
 
-终端一：
+On any platform:
 
-```powershell
-cd E:\AgentIndicator
+```sh
 npm start
 ```
 
-终端二：进入已安装并信任 hooks 的项目，然后正常运行：
+On macOS with Homebrew, install the convenience command once:
 
-```powershell
+```sh
+ln -s "$PWD/scripts/willump" "$(brew --prefix)/bin/willump"
+```
+
+You can then start Willump from any directory:
+
+```sh
+willump
+```
+
+Keep the terminal open and press `Ctrl+C` to stop a bridge started there. A healthy existing bridge
+is reused. Use `willump --reset` or `npm run session:reset` from another terminal to release the
+current CLI-session binding without terminating Codex.
+
+### 3. Run Codex normally
+
+In a repository where the hooks are installed and trusted:
+
+```sh
 codex
 ```
 
-`npm start` 固定使用 `codex-hooks` 来源，检查端口、hooks 配置和候选局域网地址。
-新启动的服务需要保持终端运行；若已有健康的日常 bridge，则复用该服务并退出启动器。
-被其他来源或程序占用的端口会报错，不会自动结束占用者。
+No test prompt or browser window is needed. The bridge publishes real CLI lifecycle events to the
+device.
 
-### 3. 连接机器人
+### 4. Configure the device
 
-已经配置并烧录的设备直接开机即可。新设备的配网、构建、烧录和串口验证见
-[固件 README](firmware/stackchan/README.md)。
+If it does not exist, copy
+`firmware/stackchan/include/config.example.h` to
+`firmware/stackchan/include/config.local.h`, then configure:
 
-机器人连接：
+- 2.4 GHz Wi-Fi credentials, or saved-Wi-Fi mode for a device that is already provisioned.
+- `BRIDGE_HOST` as the computer's reachable LAN IPv4 address or stable `.local` hostname.
+- `BRIDGE_PORT`, which defaults to `8787`.
 
-```text
-ws://<电脑局域网IPv4>:8787/status
-```
+Do not include `ws://`, the port, or `/status` in `BRIDGE_HOST`; do not use `127.0.0.1` or `0.0.0.0`.
+A `.local` hostname avoids reflashing solely because DHCP changed the computer's IPv4 address.
 
-固件配置位于本地 `firmware/stackchan/include/config.local.h`，以
-`config.example.h` 为模板，仅在文件不存在时创建。`BRIDGE_HOST` 填电脑局域网 IP，
-不含 `ws://` 或 `/status`；不能填 `127.0.0.1` 或 `0.0.0.0`。
-`USE_SAVED_WIFI=true` 优先复用设备保存的 Wi-Fi；没有保存配置时，在本地填写凭据并设为 `false`。
-本地配置、Flash 备份和固件二进制可能包含配网信息，不应提交或上传。
+Device configuration, firmware binaries, and full-flash backups may contain network credentials.
+They are Git-ignored and must not be committed or uploaded. New hardware also requires manual head
+calibration; never reuse another robot's calibration value. Follow
+[firmware/stackchan/README.md](firmware/stackchan/README.md) for backup, build, flash, and serial
+verification.
 
-新设备还需人工校准水平位置；本机的舵机基准不能直接用于其他设备。
-无有效校准时固件不会自动运动。操作见 [头部姿态说明](docs/head-motion.md)。
+## Device states
 
-## 硬件状态
+| Display  | Protocol states                     | Device behavior                                                               |
+| -------- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| Idle     | `idle`, `sleepy`, `sleep`           | LED arc eyes and a smile with occasional looking and blinking                 |
+| Thinking | `thinking`, `searching`, `speaking` | Horizontal eyes and a pulsing thought frame                                   |
+| Running  | `running`, `editing`, `tool`        | Animated Pong paddles and ball                                                |
+| Waiting  | `waiting`                           | Gold question mark falls, bounces, and remains; a new real wait plays one cue |
+| Done     | `done`                              | Smile with a one-shot left wink; a new completed turn plays one chime         |
+| Error    | `error`                             | Red crossed eyes and a short shake                                            |
+| Offline  | connection override                 | Gray crossed eyes; the head returns to level after a real disconnect          |
 
-统一协议的细分状态在硬件上合并为六种工作表情；离线是连接状态覆盖。
+Every state remains visible until a new event arrives. Done does not time out to idle. Reconnecting
+restores the latest snapshot without replaying one-shot audio. `Stop` means the response ended; it
+does not guarantee task success.
 
-| 表现 | 对应状态                            | 动画与头部                                               |
-| ---- | ----------------------------------- | -------------------------------------------------------- |
-| 空闲 | `idle`、`sleepy`、`sleep`           | 银色胶囊眼，偶尔侧看和眨眼；联网时保持抬头               |
-| 思考 | `thinking`、`searching`、`speaking` | 交替看向左右上方，配镜像思绪点；抬头约 20°               |
-| 执行 | `running`、`editing`、`tool`        | 单行书写，银色笔迹，视线跟随，抬眼回正后重写；抬头约 20° |
-| 等待 | `waiting`                           | 金色问号落地动画后保持；联网时保持抬头，新审批播放一次提示音 |
-| 完成 | `done`                              | 左眼眨一次，新 turn 播放一次 iOS 确认音；联网时保持抬头，笑眼保持到新事件 |
-| 异常 | `error`                             | 深红 `xx`，轻摇一次后保持；联网时保持抬头                |
-| 离线 | 连接失效                            | 灰色插头眼、插座眼和心电图嘴巴；头部回平                 |
+Agent states do not independently move the head. Once the bridge is connected, idle, working,
+waiting, done, and error all remain raised. See [docs/head-motion.md](docs/head-motion.md) for the
+calibration, retry, and safety boundaries.
 
-设备按最近接受的事件显示状态，完成不会在 5 秒后自动变为 idle。
-重连收到旧完成快照仍显示 done；重复完成不会覆盖后续的新状态。
-所有 Agent 状态均保持到新事件，离线由连接状态覆盖。
+## Configuration
 
-`Stop` 表示本轮响应停止，不保证任务成功；同轮显式终止错误可将完成更正为异常。
-本来源不会伪造 hooks 没有提供的细分状态。表情规范见
-[设计方案](docs/design/expression-design.md)。
+| Variable                          | Default   | Purpose                                   |
+| --------------------------------- | --------- | ----------------------------------------- |
+| `AGENT_INDICATOR_HOST`            | `0.0.0.0` | Status bridge listen address              |
+| `AGENT_INDICATOR_PORT`            | `8787`    | WebSocket and bridge health port          |
+| `AGENT_INDICATOR_HOOK_PORT`       | `8788`    | Loopback-only hook receiver port          |
+| `AGENT_INDICATOR_HOOK_SESSION_ID` | unset     | Optionally pin one CLI session            |
+| `AGENT_INDICATOR_DEBUG_EVENTS`    | unset     | Set to `1` for redacted event diagnostics |
 
-## 配置与协议
+The status and hook ports must differ. The hook receiver stays on loopback; expose only the status
+port to the trusted LAN used by the robot.
 
-日常入口使用以下环境变量，通常保持默认即可：
+The version-1 device protocol contains only `bridge.hello` and `agent.event`. Event types are defined
+in [src/domain/agentStatus.ts](src/domain/agentStatus.ts), and the wire format is defined in
+[src/domain/statusProtocol.ts](src/domain/statusProtocol.ts).
 
-| 变量                              | 默认值    | 用途                                 |
-| --------------------------------- | --------- | ------------------------------------ |
-| `AGENT_INDICATOR_HOST`            | `0.0.0.0` | 日常 bridge 监听地址                 |
-| `AGENT_INDICATOR_PORT`            | `8787`    | WebSocket 和 bridge 健康检查端口     |
-| `AGENT_INDICATOR_HOOK_PORT`       | `8788`    | 仅监听 `127.0.0.1` 的 hooks 接收端口 |
-| `AGENT_INDICATOR_HOOK_SESSION_ID` | 未设置    | 可选，固定接收指定 CLI 会话          |
-| `AGENT_INDICATOR_DEBUG_EVENTS`    | 未启用    | 设置为 `1` 输出脱敏事件诊断          |
+## Diagnostics
 
-两个端口必须不同。更改 hooks 端口时，运行 bridge 和 Codex 的两个终端都需设置相同值；
-更改状态端口或电脑 IP 时，还需同步固件配置。
-服务面向可信局域网使用，电脑防火墙需允许机器人访问状态端口；hooks 端口无需对局域网开放。
-
-WebSocket 协议版本为 `1`，只包含两种消息：
-
-```json
-{ "kind": "bridge.hello", "source": "codex-cli-hooks", "version": 1, "at": 1791244800000 }
-```
-
-```json
-{
-  "kind": "agent.event",
-  "event": { "id": "example-1", "type": "turn.started", "at": 1791244801000, "origin": "codex" }
-}
-```
-
-`at` 为 Unix 毫秒时间。事件类型和结构以
-[agentStatus.ts](src/domain/agentStatus.ts)、[statusProtocol.ts](src/domain/statusProtocol.ts)
-为准；硬件只理解统一事件，无需解析 Codex 原始协议。
-
-日常 hooks 通知不发送提示词、命令正文、输出、文件内容或进程命令行。
-终止错误补充监听在电脑本地读取绑定会话的 transcript，接受显式整轮终止错误。
-它是版本适配，并非稳定公共协议；升级 Codex 后需重新核对。
-
-## 诊断与恢复
-
-```powershell
+```sh
 npm run doctor
-```
-
-诊断显示服务来源、候选 IP、WebSocket 客户端数、最近事件、会话绑定以及错误/进程监听状态。
-客户端数量包含浏览器，不能单凭数量确认机器人已绘制表情。
-
-| 现象                              | 排查方式                                                          |
-| --------------------------------- | ----------------------------------------------------------------- |
-| 机器人显示离线                    | 检查 Wi-Fi、电脑 IP、bridge 是否运行以及防火墙；设备会自动重连    |
-| 已连接，但 CLI 没有带来状态变化   | 检查 hooks 安装范围、CLI 的 `/hooks` 信任以及是否被另一个会话绑定 |
-| bridge 启动提示端口占用           | 在原终端停止旧 mock/app-server 或其他占用服务，再启动日常入口     |
-| CLI 意外退出后状态未恢复          | 查看 `cliObserver` 是否降级，必要时显式释放会话                   |
-| 完成后一直保持笑眼和抬头         | done 保持到新事件；头部跟随后台连接，后台关闭或断线后才回水平     |
-| 后台已连接，但头部不动           | 查看串口 `v` 的 ready/error；初始化失败可用 `e` 重新尝试，见 [修复记录](docs/head-connection-2026-10-20.md) |
-
-显式释放当前绑定：
-
-```powershell
-npm run session:reset
-```
-
-该命令不停止用户 CLI，固定会话配置仍保留。释放后在目标 CLI 输入新任务即可重新绑定。
-自动进程退出检测目前仅支持 Windows；无法验证进程身份或权限不足时保持绑定，由诊断提示降级。
-
-脱敏采集统一事件 60 秒，结果写入 `.tmp/events/`：
-
-```powershell
 npm run events:capture -- 60
-```
-
-只读连续采样 12 小时，结果写入 `.tmp/stability/`：
-
-```powershell
 npm run stability -- --minutes 720
 ```
 
-采样期间电脑保持唤醒，bridge 和机器人保持运行。验收需检查最终 summary、
-实际时长、服务失败及零客户端记录；指定 720 分钟或退出码为 0 本身不代表通过。
-烧录和服务维护窗口应单独记录，不计为连续稳定运行证据。
+`doctor` reports bridge and hook health, candidate LAN addresses, session ownership, observer status,
+and the latest event. A WebSocket client count can include the browser simulator and does not prove
+that the physical device rendered the state.
 
-## 开发与验证
+Automatic CLI-process exit detection is currently Windows-specific. On unsupported systems, use the
+health diagnostics and an explicit session reset when a dead CLI remains bound.
 
-| 命令                     | 用途                                              |
-| ------------------------ | ------------------------------------------------- |
-| `npm test`               | 状态映射、HTTP、会话、脚本和 Windows 进程恢复回归 |
-| `npm run build`          | TypeScript 检查和 Vite 生产构建                   |
-| `npm run test:contract`  | 校验本机 Codex app-server schema 契约             |
-| `npm run format`         | 按约定整理 TS/JS 和当前 HTML 设计预览             |
-| `npm run dev`            | 启动可选的浏览器协议模拟器，以终端打印地址为准    |
-| `npm run preview`        | 预览已构建的浏览器模拟器                          |
-| `npm run dev:mock`       | 启动 mock bridge，自动产生模拟事件                |
-| `npm run dev:app-server` | 启动独立 `codex app-server --stdio` 开发来源      |
+## Development
 
-mock/app-server 与日常 bridge 共用默认状态端口，切换前需停止旧服务。
-app-server 来源用于接入开发，通过 `AGENT_INDICATOR_CODEX_PROMPT` 配置独立测试任务，
-不会监听另一个终端里的 CLI。浏览器固定消费 `ws://127.0.0.1:8787/status`，仅供电脑本地使用；
-其显示样式和状态保持规则不代替固件验收。
+| Command                  | Purpose                                                              |
+| ------------------------ | -------------------------------------------------------------------- |
+| `npm test`               | Node bridge, hooks, lifecycle, protocol, and script regression tests |
+| `npm run build`          | TypeScript checking and Vite production build                        |
+| `npm run test:contract`  | Check the consumed Codex app-server schema discriminants             |
+| `npm run format`         | Format project-owned TS/JS and browser-preview sources               |
+| `npm run dev`            | Run the optional browser simulator                                   |
+| `npm run dev:mock`       | Run the bridge with generated mock events                            |
+| `npm run dev:app-server` | Run the separate app-server development source                       |
 
-旧电脑 2026-10-15 验收记录：威朗普表情已烧录，两个固件环境编译及 371 条设备逻辑断言通过。
-当时 84 项 Node 测试、项目构建与协议契约检查也全部通过。协议契约目前只检查
-TurnStatus / ThreadActiveFlag 两个类型，不是完整 Codex 协议验证。
-当前 `test:contract` 使用跨平台 Node 脚本，无需 PowerShell；2026-10-14 的 macOS schema 检查通过，
-本轮测试范围见 [macOS 环境准备](docs/macos-setup.md)。
-新 Mac 的 Wi-Fi 与 bridge 握手、idle 快照已验证；真实 CLI 驱动及完整联网表情/头部回放仍待验收，见 [网络恢复记录](docs/network-validation-2026-10-15.md)。
-代码约定与工具配置见 [代码样式](docs/code-style.md)；固件编译、测试和烧录见
-[固件 README](firmware/stackchan/README.md)。
+Head-motion native tests and PlatformIO environments are documented in
+[firmware/stackchan/test/native/README.md](firmware/stackchan/test/native/README.md) and
+[firmware/stackchan/README.md](firmware/stackchan/README.md). Mock, compilation, serial feedback, and
+human-observed hardware behavior are separate levels of evidence.
 
-## 目录与后续工作
+## Repository guide
 
 ```text
-server/                 bridge、状态来源、事件映射与回归测试
-shared/                 hooks 注册表、Windows 进程适配器
-scripts/                启动、安装、诊断、采集和设备工具
-src/                    浏览器模拟器、统一状态与协议定义
-firmware/stackchan/      ESP32 固件、动画、展示策略与头部控制
-docs/                   接入说明、设计规范、计划与验收记录
-HANDOFF.md              跨设备恢复、现状、验证边界与接力顺序
+server/                 Node bridge, event sources, and lifecycle tests
+shared/                 Shared hook registry and platform adapters
+scripts/                Launch, installation, diagnostics, and capture tools
+src/                    Browser simulator and shared protocol definitions
+firmware/stackchan/      ESP32 firmware, assets, face rendering, and head control
+docs/                   Design, setup, behavior, and validation records
+AGENTS.md                Repository-wide development constraints
+REVIEW.md                Evidence requirements for code-review findings
+HANDOFF.md               Local-device migration and current validation state
 ```
 
-尚未完成的验收：有效的 12 小时连续采样、Wi-Fi/路由器中断、真实审批拒绝、
-舵机故障保护，以及上下文压缩、图像操作和子代理的更广真实 CLI 场景。
-已有单元测试和受控回放不能替代这些验收；目前无需新增硬件表情状态。
-最新进展以 [开发计划](docs/development-plan.md) 为准，迁移步骤见 [接力说明](HANDOFF.md)。
+Review [AGENTS.md](AGENTS.md) before making changes and [REVIEW.md](REVIEW.md) before reporting review
+findings. Asset provenance and licenses are recorded in
+[firmware/stackchan/assets/README.md](firmware/stackchan/assets/README.md).
+
+Outstanding physical validation includes a completed 12-hour stability run, router/Wi-Fi interruption,
+a real rejected approval, and injected servo/mechanical failures. Unit tests and controlled event
+replay do not replace those checks.
