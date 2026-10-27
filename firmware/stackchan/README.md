@@ -102,12 +102,12 @@ $env:PLATFORMIO_CORE_DIR = "$PWD/.tmp/platformio"
 ## 固件回归
 
 logic-test 在 ESP32 上运行纯头部策略、动画关键帧、协议解析和完成展示策略。
-不初始化舵机、Wi-Fi、NVS。本轮运行 371 条断言、0 失败；结束后已恢复正式固件。
+不初始化舵机、Wi-Fi、NVS。本轮运行 491 条断言、0 失败；结束后已恢复正式固件。
 
 ```powershell
 $env:PLATFORMIO_CORE_DIR = "$PWD/.tmp/platformio"
 .tmp/hardware-venv/Scripts/python.exe -m platformio run -d firmware/stackchan -e logic-test -t upload --upload-port COM3
-.tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --expect 'LOGIC_TEST_RESULT checks=371 failures=0'
+.tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --expect 'LOGIC_TEST_RESULT checks=491 failures=0'
 .tmp/hardware-venv/Scripts/python.exe -m platformio run -d firmware/stackchan -e status-client -t upload --upload-port COM3
 .tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --send v
 ```
