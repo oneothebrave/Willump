@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { WebSocketServer, type WebSocket } from "ws";
+import type { StatusMessage } from "../../../src/domain/statusProtocol";
+import { createHookEventPublisher, type HookEvent } from "./events";
 import { createInteractionWatcher } from "./interaction";
 
 async function runtime(context: TestContext) {
@@ -102,6 +104,55 @@ test(
         .every((request: any) => request.params.includeTurns === false),
     );
     assert.equal(JSON.stringify(watcher.status()).includes("private"), false);
+  },
+);
+
+test(
+  "cleared waitingOnApproval synchronously restores the active command",
+  { skip: unsupported },
+  async (context) => {
+    const server = await runtime(context);
+    const messages: StatusMessage[] = [];
+    const publisher = createHookEventPublisher((message) => messages.push(message), undefined, {
+      runtimeInteractions: true,
+    });
+    const event = (
+      name: HookEvent["hook_event_name"],
+      id: string,
+      fields: Partial<HookEvent> = {},
+    ): HookEvent => ({
+      id,
+      hook_event_name: name,
+      session_id: "s",
+      turn_id: "t",
+      ...fields,
+    });
+    publisher.receive(event("UserPromptSubmit", "prompt"));
+    publisher.receive(event("PreToolUse", "tool", { tool_name: "Bash", tool_use_id: "shell" }));
+    const watcher = createInteractionWatcher(
+      server.path,
+      publisher.status,
+      publisher.observeInteraction,
+      { intervalMs: 60000 },
+    );
+    context.after(() => watcher.stop());
+    const last = () => {
+      const message = messages[messages.length - 1];
+      return message.kind === "agent.event" ? message.event.type : undefined;
+    };
+
+    server.setStatus({ type: "active", activeFlags: ["waitingOnApproval"] });
+    await watcher.poll();
+    assert.equal(last(), "approval.requested");
+    assert.equal(publisher.status().waitingForUser, true);
+
+    const beforeClear = messages.length;
+    server.setStatus({ type: "active", activeFlags: [] });
+    await watcher.poll();
+    assert.equal(messages.length, beforeClear + 1);
+    assert.equal(last(), "command.started");
+    assert.equal(publisher.status().activeTools, 1);
+    assert.equal(publisher.status().waitingForUser, false);
   },
 );
 
