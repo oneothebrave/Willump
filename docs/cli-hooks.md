@@ -24,7 +24,9 @@ codex
 ## 接入与隐私
 
 CLI 生命周期 hook → `scripts/codex-hook.mjs` → loopback HTTP → Node bridge →
-既有 `agent.event` → 硬件。协议仍只有 `bridge.hello` 和 `agent.event`。
+既有 `agent.event` → 硬件。状态协议为 `bridge.hello` 和 `agent.event`；设备控制另有
+`device.hello`、`device.command` 和 `device.command.ack`，只携带命令 ID 与动作，不携带
+prompt、回答或审批内容。
 本机已有 Codex daemon 时，后台另外通过本地 Unix socket 只读查询绑定会话的运行状态，
 并从现有 transcript 增量提取异步问题卡片/用户回复事件；两者共同决定是否真正等待用户。
 

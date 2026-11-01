@@ -12,6 +12,7 @@ struct PY32IOExpander_Class {
   bool digitalWrite(int pin, bool value) {
     if (pin != 0) throw std::runtime_error("non-servo power write");
     fake::state.powerWrites.push_back(value);
+    fake::state.events.push_back(value ? "vm-on" : "vm-off");
     if (value && !fake::state.powered) {
       fake::state.poweredAt = fake::state.now;
       ++fake::state.powerCycles;

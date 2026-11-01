@@ -1,10 +1,21 @@
 #pragma once
 #include <ArduinoJson.h>
+#include "control_protocol.h"
 #include "event_states.h"
 #include "presentation_policy.h"
 #include <math.h>
 
-enum class MessageKind { Ignored, Hello, Event, ProtocolError, Oversize, BadJson, BadEvent };
+enum class MessageKind {
+  Ignored,
+  Hello,
+  Event,
+  DeviceCommand,
+  ProtocolError,
+  Oversize,
+  BadJson,
+  BadEvent,
+  BadControl,
+};
 
 struct DecodedMessage {
   MessageKind kind;
@@ -39,6 +50,22 @@ inline DecodedMessage decodeStatusMessage(const uint8_t* payload, size_t length,
       return {MessageKind::ProtocolError};
     }
     return hello;
+  }
+  if (!strcmp(kind, ControlProtocol::COMMAND_KIND)) {
+    if (!ready) {
+      return {MessageKind::Ignored};
+    }
+    const char* id = doc["id"] | "";
+    const char* action = doc["action"] | "";
+    if (!doc["version"].is<int>() || doc["version"].as<int>() != ControlProtocol::VERSION ||
+        !doc["id"].is<const char*>() || !id[0] ||
+        strlen(id) > ControlProtocol::MAX_COMMAND_ID_BYTES ||
+        !doc["action"].is<const char*>() || strcmp(action, ControlProtocol::ACTION_POWEROFF)) {
+      return {MessageKind::BadControl};
+    }
+    DecodedMessage command{MessageKind::DeviceCommand};
+    strcpy(command.id, id);
+    return command;
   }
   if (!ready || strcmp(kind, "agent.event")) {
     return {MessageKind::Ignored};

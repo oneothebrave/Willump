@@ -26,6 +26,7 @@ Codex CLI hooks
 - 支持会话与 turn 隔离、并行工具、审批/输入恢复和终止错误识别，不向硬件发送提示词或文件内容。
 - 头部跟随连接状态：第一次有效 hello 前保持当前姿态，连接后立即抬头，真实断线后才回平。
 - 提供本地诊断、显式会话释放、脱敏事件采集和长时间稳定性采样。
+- 支持从命令行关闭所有当前连接的 StackChan，并分别报告目标、已确认和超时设备数量。
 - 提供协议开发用的浏览器模拟器；日常使用不需要打开浏览器。
 
 ## 环境要求
@@ -84,6 +85,18 @@ willump
 需要释放当前 CLI 会话绑定时，在另一终端运行 `willump --reset` 或
 `npm run session:reset`，不会终止 Codex。
 
+需要关闭所有当前连接的 StackChan 时，运行：
+
+```sh
+willump --poweroff
+# 或：npm run poweroff
+```
+
+该命令只联系已经在运行的本地 bridge，不会自动启动服务。它会报告目标、已确认和超时的设备数量。
+ACK 表示固件已校验命令并成功放入主循环队列，不表示设备已经断电。找不到 bridge、bridge 来源
+不匹配、没有已注册固件、零确认、部分确认或超时都会给出明确诊断；除非所有目标都确认，否则退出码
+非零。
+
 ### 3. 正常运行 Codex
 
 进入已经安装并信任 hooks 的仓库：
@@ -140,9 +153,11 @@ Agent 状态本身不单独控制头部。bridge 连接期间，空闲、工作�
 
 状态端口和 hooks 端口必须不同。hooks 接收端保持回环监听；只向机器人所在的可信局域网开放状态端口。
 
-版本 1 的设备协议只有 `bridge.hello` 和 `agent.event`。事件类型定义在
-[src/domain/agentStatus.ts](src/domain/agentStatus.ts)，传输格式定义在
-[src/domain/statusProtocol.ts](src/domain/statusProtocol.ts)。
+版本 1 的设备协议包含 `bridge.hello`、`agent.event`、`device.hello`、`device.command` 和
+`device.command.ack`。事件类型定义在 [src/domain/agentStatus.ts](src/domain/agentStatus.ts)，
+传输格式定义在 [src/domain/statusProtocol.ts](src/domain/statusProtocol.ts)。bridge 只接受来自
+回环地址、且带有精确 `x-willump-control: poweroff` 头的 `POST /control/poweroff`；浏览器预检不会
+被接受。命令只发送给已注册的固件连接，不会缓存或在重连后重放。
 
 ## 诊断
 

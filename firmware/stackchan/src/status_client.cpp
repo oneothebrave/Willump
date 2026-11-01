@@ -7,10 +7,12 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <M5Unified.h>
+#include "control_protocol.h"
 #include "event_chime.h"
 #include "event_states.h"
 #include "face_renderer.h"
 #include "head_motion.h"
+#include "power_off.h"
 #include "status_message.h"
 #include "firmware_version.h"
 
@@ -65,6 +67,9 @@ struct DisplayState {
 };
 
 QueueHandle_t displayQueue = nullptr;
+QueueHandle_t controlQueue = nullptr;
+ControlCommandHistory controlCommandHistory;
+bool powerOffStarted = false;
 DisplayState displayed = {false, false, 0, nullptr, "Wi-Fi connecting", "-", 0, "offline", 0, 0};
 
 void publishDisplayState() {
@@ -159,6 +164,36 @@ void draw() {
   M5.Display.printf("Firmware: %s", INDICATOR_FIRMWARE_VERSION);
 }
 
+void drawPowerOff() {
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.setCursor(16, 100);
+  M5.Display.print("Powering off");
+}
+
+void sendDeviceHello() {
+  JsonDocument doc;
+  doc["kind"] = ControlProtocol::HELLO_KIND;
+  doc["version"] = ControlProtocol::VERSION;
+  char payload[96];
+  serializeJson(doc, payload, sizeof(payload));
+  socket.sendTXT(payload);
+  Serial.println("status-client device-hello");
+}
+
+void sendDeviceCommandAck(const char* id) {
+  JsonDocument doc;
+  doc["kind"] = ControlProtocol::ACK_KIND;
+  doc["version"] = ControlProtocol::VERSION;
+  doc["id"] = id;
+  doc["action"] = ControlProtocol::ACTION_POWEROFF;
+  char payload[256];
+  serializeJson(doc, payload, sizeof(payload));
+  socket.sendTXT(payload);
+  Serial.printf("control ack id=%s action=poweroff\n", id);
+}
+
 void receiveMessage(uint8_t* payload, size_t length) {
   const auto decoded = decodeStatusMessage(payload, length, protocolReady);
   switch (decoded.kind) {
@@ -169,6 +204,24 @@ void receiveMessage(uint8_t* payload, size_t length) {
       origin = "-";
       setConnection("Connected");
       Serial.println("status-client hello version=1");
+      sendDeviceHello();
+      break;
+    case MessageKind::DeviceCommand:
+      if (controlCommandHistory.contains(decoded.id)) {
+        sendDeviceCommandAck(decoded.id);
+        break;
+      }
+      if (controlQueue) {
+        ControlCommand command = {};
+        strcpy(command.id, decoded.id);
+        if (xQueueSend(controlQueue, &command, 0) == pdTRUE) {
+          controlCommandHistory.remember(decoded.id);
+          sendDeviceCommandAck(decoded.id);
+          Serial.printf("control queued id=%s action=poweroff\n", decoded.id);
+          break;
+        }
+      }
+      Serial.printf("control rejected=queue-unavailable id=%s\n", decoded.id);
       break;
     case MessageKind::ProtocolError:
       protocolReady = false;
@@ -242,20 +295,37 @@ void setup() {
   }
   head.begin();
   displayQueue = xQueueCreate(1, sizeof(DisplayState));
-  if (!displayQueue || xTaskCreatePinnedToCore(networkTask, "indicator-network", 8192, nullptr, 1,
-                                               nullptr, 0) != pdPASS) {
+  controlQueue = xQueueCreate(1, sizeof(ControlCommand));
+  if (!displayQueue || !controlQueue ||
+      xTaskCreatePinnedToCore(networkTask, "indicator-network", 8192, nullptr, 1, nullptr, 0) !=
+          pdPASS) {
     displayed.connectionLabel = "Network task failed";
-    Serial.println("status-client network-task=failed");
+    Serial.printf("status-client network-task=failed display-queue=%d control-queue=%d\n",
+                  displayQueue != nullptr, controlQueue != nullptr);
   }
 }
 
 void loop() {
+  if (powerOffStarted) {
+    delay(1000);
+    return;
+  }
   M5.update();
   if (M5.Touch.getDetail().wasPressed() && millis() - lastTap > 300) {
     lastTap = millis();
     debugPage = face.available() ? !debugPage : true;
     dirty = true;
     Serial.printf("face page=%s\n", debugPage ? "details" : "expression");
+  }
+  ControlCommand controlCommand = {};
+  if (controlQueue && xQueueReceive(controlQueue, &controlCommand, 0) == pdTRUE) {
+    powerOffStarted = true;
+    Serial.printf("control executing id=%s action=poweroff\n", controlCommand.id);
+    runPowerOffSequence(
+        [](int channel) { M5.Speaker.stop(channel); }, [] { drawPowerOff(); },
+        [&] { head.shutdown(); }, [] { M5.Power.powerOff(); });
+    Serial.println("control poweroff-returned");
+    return;
   }
   DisplayState latest;
   if (displayQueue && xQueueReceive(displayQueue, &latest, 0) == pdTRUE) {

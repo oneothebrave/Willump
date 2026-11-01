@@ -169,6 +169,33 @@ class HeadMotion {
     startup.restart(millis());
   }
 
+  // Shutdown is one bounded attempt: saved horizontal, torque off, then VM low.
+  // It never changes calibration, saved horizontal, or automatic-mode preferences.
+  void shutdown() {
+    const int level = policy.horizontal();
+    const bool calibrated = ready && HeadPolicy::validCalibration(level, zero);
+    if (calibrated) {
+      const int written = bus.WritePos(2, level, 900, 0);
+      const int status = bus.getState();
+      if (written == 1 && status == 0) {
+        Serial.printf("head shutdown target=%d duration=900ms\n", level);
+        delay(1000);
+      } else {
+        Serial.printf("head shutdown move-failed error=%d status=%d\n", bus.getLastError(), status);
+      }
+    } else {
+      Serial.printf("head shutdown move-skipped ready=%d calibrated=%d\n", ready, calibrated);
+    }
+    if (uartReady) {
+      const bool torqueOff = bus.EnableTorque(2, 0) == 1;
+      Serial.printf("head shutdown torque-off=%d\n", torqueOff);
+    }
+    if (powerReady) {
+      const bool vmOff = power.digitalWrite(0, false);
+      Serial.printf("head shutdown vm-off=%d\n", vmOff);
+    }
+  }
+
   void update(bool connected) {
     const uint32_t now = millis();
     policy.observeConnection(connected);

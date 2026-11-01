@@ -6,6 +6,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CONTROL_PATH = "/control/poweroff";
+const CONTROL_HEADER = "x-willump-control";
+const CONTROL_VALUE = "poweroff";
+const CONTROL_TIMEOUT_MS = 3000;
 
 export function bridgeSettings(env = process.env) {
   const port = Number(env.AGENT_INDICATOR_PORT ?? 8787);
@@ -68,6 +72,108 @@ export function health(host, port) {
     healthRequest.on("error", () => finish(null));
     healthRequest.end();
   });
+}
+
+export function controlPowerOff(host, port) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer;
+    const finish = (result) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
+    };
+    const controlRequest = request(
+      {
+        host,
+        port,
+        path: CONTROL_PATH,
+        method: "POST",
+        headers: { [CONTROL_HEADER]: CONTROL_VALUE },
+      },
+      (response) => {
+        let data = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          data += chunk;
+          if (data.length > 65536) {
+            finish(null);
+            controlRequest.destroy();
+          }
+        });
+        response.on("error", () => finish(null));
+        response.on("end", () => {
+          try {
+            finish({ status: response.statusCode, body: JSON.parse(data) });
+          } catch {
+            // The bridge answered, but not with a usable control result.
+            finish({ status: response.statusCode, body: null });
+          }
+        });
+      },
+    );
+    timer = setTimeout(() => {
+      finish(null);
+      controlRequest.destroy();
+    }, CONTROL_TIMEOUT_MS);
+    controlRequest.on("error", () => finish(null));
+    controlRequest.end();
+  });
+}
+
+export async function powerOff(config) {
+  const bridge = await health(config.probeHost, config.port);
+  if (bridge?.ok !== true || bridge.service !== "agent-indicator-bridge") {
+    console.error(
+      `[关机] 未找到正在运行的本地 bridge（${config.probeHost}:${config.port}）。请先启动 willump；--poweroff 不会自动启动服务，且控制接口只接受回环地址。`,
+    );
+    return 1;
+  }
+  if (bridge.source !== "codex-cli-hooks") {
+    console.error(
+      `[关机] bridge 来源为 ${typeof bridge.source === "string" ? bridge.source : "未知"}，不是 CLI bridge；未发送关机命令。`,
+    );
+    return 1;
+  }
+
+  const response = await controlPowerOff(config.probeHost, config.port);
+  if (!response) {
+    console.error("[关机] bridge 未在限定时间内返回确认结果；设备状态未知，未重试。");
+    return 1;
+  }
+
+  const target = response.body?.target;
+  const acknowledged = response.body?.acknowledged;
+  const timedOut = response.body?.timedOut;
+  if (
+    !Number.isInteger(target) ||
+    !Number.isInteger(acknowledged) ||
+    !Number.isInteger(timedOut) ||
+    target < 0 ||
+    acknowledged < 0 ||
+    timedOut < 0
+  ) {
+    console.error("[关机] bridge 返回了无法识别的确认结果。");
+    return 1;
+  }
+
+  if (target === 0) {
+    console.error("[关机] bridge 没有已注册的固件设备；未发送任何命令。");
+    return 1;
+  }
+
+  console.log(`[关机] 目标 ${target} 台，已确认 ${acknowledged} 台，超时 ${timedOut} 台。`);
+  if (response.status === 200 && acknowledged === target && timedOut === 0) {
+    console.log(
+      "[关机] 所有目标设备已接受命令并排队执行；ACK 只表示已调度，不表示设备已经断电。",
+    );
+    return 0;
+  }
+
+  console.error("[关机] 部分或全部设备未确认；设备可能没有执行关机。");
+  return 1;
 }
 
 export function canBind(host, port) {
@@ -235,8 +341,22 @@ async function localChecks(config) {
 }
 
 export async function main(args = process.argv.slice(2)) {
-  if (args.some((arg) => !["--check", "--reset-session"].includes(arg)) || args.length > 1) {
-    throw new Error("用法：npm start、npm run doctor 或 npm run session:reset");
+  if (
+    args.some((arg) => !["--check", "--reset-session", "--poweroff"].includes(arg)) ||
+    args.length > 1
+  ) {
+    throw new Error("用法：npm start、npm run doctor、npm run session:reset 或 npm run poweroff");
+  }
+  if (args.includes("--poweroff")) {
+    const config = bridgeSettings();
+    // The control endpoint accepts loopback callers only, even if the bridge listens on the LAN.
+    const probeHost =
+      config.probeHost === "::1" ||
+      config.probeHost === "localhost" ||
+      /^127(?:\.\d{1,3}){3}$/.test(config.probeHost)
+        ? config.probeHost
+        : "127.0.0.1";
+    return powerOff({ ...config, probeHost });
   }
   const config = settings();
   await localChecks(config);

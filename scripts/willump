@@ -23,4 +23,8 @@ if [[ "${1:-}" == "--reset" ]]; then
   shift
   exec npm run session:reset -- "$@"
 fi
+if [[ "${1:-}" == "--poweroff" ]]; then
+  shift
+  exec npm run poweroff -- "$@"
+fi
 exec npm start -- "$@"

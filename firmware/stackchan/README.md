@@ -7,7 +7,7 @@
 当前 Mac 使用固定 `.local` 主机名连接，修复 DHCP 地址变化后机器找不到后台的问题，见 [连接记录](../../docs/bridge-hostname-2026-10-25.md)。
 后台协议连接成功后抬头，后台关闭或断线后回水平；加入有限启动恢复与失败后的串口诊断。
 沿用 turn 完成时的 iOS 确认“叮咚”、《英雄联盟》问号动画与审批音。
-491 条本机逻辑断言及 77 条头部驱动模拟检查全部通过。此前后台连接、关闭、重连的实际运动验证见 [历史记录](../../docs/head-connection-2026-10-20.md)。
+本机逻辑断言与头部驱动模拟检查覆盖控制协议、去重、关机顺序和原有连接策略；此前后台连接、关闭、重连的实际运动验证见 [历史记录](../../docs/head-connection-2026-10-20.md)。
 USB 用于烧录/串口，日常状态通过 Wi-Fi WebSocket 获取；电脑端运行 `npm start` 和普通 Codex CLI。
 音效更新历史见 [Turn 完成音效](../../docs/completion-audio.md)，此前问号更新见 [问号动画](../../docs/permission-question-animation.md)与[审批提示音](../../docs/approval-audio.md)。
 换电脑的配置、工具恢复和备份信息见 [HANDOFF.md](../../HANDOFF.md)。
@@ -42,9 +42,17 @@ editing/tool 使用执行造型，searching/speaking 使用思考，sleepy/sleep
 空闲、等待、完成等事件不再控制头部。无有效校准不运动。
 限位、最多 3 次故障重试和串口命令见 [头部说明](../../docs/head-motion.md)。
 
+收到 `device.command` 的 `poweroff` 后，网络回调只做校验、去重、入队和 ACK；硬件动作留在主循环。
+关机时先停止两个音频通道并显示短提示，再在头部就绪且校准有效时命令 ID 2 回到已保存水平并最多
+等待约 1 秒；无论移动是否成功，只对 ID 2 关闭扭矩并把 PY32 IO0 舵机 VM 拉低，最后调用
+`M5.Power.powerOff()`。头部不可用、未校准或通信失败时只记录并继续，不重试、不阻塞关机，也不
+改写原厂校准、已保存水平或自动模式偏好。ACK 表示命令已校验并排队，不表示已经断电。
+
 ## 配置与协议
 
-仅消费版本 1 的 bridge.hello 与 agent.event；13 个事件和 TypeScript 映射一致。
+版本 1 接收 `bridge.hello`、`agent.event` 和 `device.command`，并在合法 hello 后发送
+`device.hello`、在命令入队后发送 `device.command.ack`；13 个事件和 TypeScript 映射一致。
+命令 ID 上限 64 字节，重复 ID 可以再次 ACK，但只执行一次；命令不会缓存或在重连后重放。
 连接 `ws://<电脑局域网IP或.local主机名>:8787/status`，不能填写 127.0.0.1 或 0.0.0.0。
 本机已配网设备的 `BRIDGE_HOST` 为 `larrys-mac-mini.local`。当前 ESP32-S3 网络库已启用 mDNS 查询，
 WebSocket 重连时通过主机名解析地址；电脑与机器人需处于允许 mDNS 的同一局域网。
@@ -101,13 +109,14 @@ $env:PLATFORMIO_CORE_DIR = "$PWD/.tmp/platformio"
 
 ## 固件回归
 
-logic-test 在 ESP32 上运行纯头部策略、动画关键帧、协议解析和完成展示策略。
-不初始化舵机、Wi-Fi、NVS。本轮运行 491 条断言、0 失败；结束后已恢复正式固件。
+logic-test 在 ESP32 上运行纯头部策略、动画关键帧、控制协议解析、去重和完成展示策略。
+不初始化舵机、Wi-Fi、NVS。当前断言总数为 505，串口须输出
+`LOGIC_TEST_RESULT checks=505 failures=0`；结束后恢复正式固件。
 
 ```powershell
 $env:PLATFORMIO_CORE_DIR = "$PWD/.tmp/platformio"
 .tmp/hardware-venv/Scripts/python.exe -m platformio run -d firmware/stackchan -e logic-test -t upload --upload-port COM3
-.tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --expect 'LOGIC_TEST_RESULT checks=491 failures=0'
+.tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --expect 'LOGIC_TEST_RESULT checks=505 failures=0'
 .tmp/hardware-venv/Scripts/python.exe -m platformio run -d firmware/stackchan -e status-client -t upload --upload-port COM3
 .tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --send v
 ```

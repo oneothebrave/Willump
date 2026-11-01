@@ -1,4 +1,6 @@
 #include "head_motion.h"
+#include "control_protocol.h"
+#include "power_off.h"
 #include "presentation_policy.h"
 #include <algorithm>
 #include <iostream>
@@ -127,6 +129,118 @@ void explicitDisableAndCalibration() {
   CHECK(fake::state.factoryZero == 599);
 }
 
+void shutdownFromRaisedPose() {
+  fake::state = {};
+  HeadMotion head;
+  head.begin();
+  for (uint32_t now = 0; now <= 3000; now += 100) tick(head, now, true);
+  CHECK(fake::state.raw == 655);
+
+  fake::state.moves.clear();
+  fake::state.writeAttempts.clear();
+  fake::state.torqueWrites.clear();
+  fake::state.powerWrites.clear();
+  fake::state.delays.clear();
+  fake::state.events.clear();
+  head.shutdown();
+
+  CHECK(fake::state.moves == std::vector<int>{591});
+  CHECK(fake::state.writeAttempts == std::vector<int>{591});
+  CHECK(fake::state.delays == std::vector<uint32_t>{1000});
+  CHECK(fake::state.torqueWrites == std::vector<int>{0});
+  CHECK(fake::state.powerWrites == std::vector<bool>{false});
+  CHECK((fake::state.events ==
+         std::vector<std::string>{"move", "torque-off", "vm-off"}));
+  CHECK(fake::state.automatic);
+  CHECK(fake::state.settingsWrites.empty());
+  CHECK(fake::state.factoryZero == 599);
+  CHECK(fake::state.level == 591);
+}
+
+void shutdownMoveFailureIsBounded() {
+  fake::state = {};
+  HeadMotion head;
+  head.begin();
+  for (uint32_t now = 0; now <= 3000; now += 100) tick(head, now, true);
+
+  fake::state.moves.clear();
+  fake::state.writeAttempts.clear();
+  fake::state.torqueWrites.clear();
+  fake::state.powerWrites.clear();
+  fake::state.delays.clear();
+  fake::state.events.clear();
+  fake::state.writeOK = false;
+  head.shutdown();
+
+  CHECK(fake::state.writeAttempts == std::vector<int>{591});
+  CHECK(fake::state.moves.empty());
+  CHECK(fake::state.delays.empty());
+  CHECK(fake::state.torqueWrites == std::vector<int>{0});
+  CHECK(fake::state.powerWrites == std::vector<bool>{false});
+  CHECK((fake::state.events == std::vector<std::string>{"torque-off", "vm-off"}));
+}
+
+void shutdownUncalibratedAndUnavailable() {
+  fake::state = {};
+  fake::state.level = -1;
+  fake::state.automatic = false;
+  fake::state.raw = 601;
+  HeadMotion head;
+  head.begin();
+  for (uint32_t now = 0; now <= 3000; now += 100) tick(head, now, true);
+
+  fake::state.torqueWrites.clear();
+  fake::state.powerWrites.clear();
+  fake::state.delays.clear();
+  fake::state.events.clear();
+  head.shutdown();
+  CHECK(fake::state.moves.empty());
+  CHECK(fake::state.delays.empty());
+  CHECK(fake::state.torqueWrites == std::vector<int>{0});
+  CHECK(fake::state.powerWrites == std::vector<bool>{false});
+  CHECK(fake::state.level == -1);
+  CHECK(!fake::state.automatic);
+
+  fake::state = {};
+  fake::state.available = false;
+  HeadMotion unavailable;
+  unavailable.begin();
+  for (uint32_t now = 0; now <= 14000; now += 100) tick(unavailable, now, true);
+  fake::state.torqueWrites.clear();
+  fake::state.powerWrites.clear();
+  fake::state.delays.clear();
+  unavailable.shutdown();
+  CHECK(fake::state.writeAttempts.empty());
+  CHECK(fake::state.delays.empty());
+  CHECK(fake::state.torqueWrites == std::vector<int>{0});
+  CHECK(fake::state.powerWrites == std::vector<bool>{false});
+}
+
+void powerOffSequenceOrdering() {
+  std::vector<std::string> order;
+  runPowerOffSequence(
+      [&](int channel) { order.push_back("audio" + std::to_string(channel)); },
+      [&] { order.push_back("display"); }, [&] { order.push_back("head"); },
+      [&] { order.push_back("power"); });
+  CHECK((order == std::vector<std::string>{"audio0", "audio1", "display", "head", "power"}));
+}
+
+void controlCommandHistoryTests() {
+  ControlCommandHistory history;
+  CHECK(!history.contains("first"));
+  history.remember("first");
+  CHECK(history.contains("first"));
+  history.remember("first");
+  history.remember("second");
+  history.remember("third");
+  history.remember("fourth");
+  CHECK(history.contains("first"));
+  history.remember("fifth");
+  CHECK(!history.contains("first"));
+  CHECK(history.contains("fifth"));
+  CHECK(history.contains("fourth"));
+}
+
 int main() {
   const auto run = [](const char* name, auto test) {
     const int before = failures;
@@ -140,6 +254,11 @@ int main() {
   run("all_hook_states_keep_head_raised", hooksCannotLowerAWorkingHead);
   run("bounded_motion_failure", neverReadyAndBoundedMotionFailure);
   run("explicit_disable_and_calibration", explicitDisableAndCalibration);
+  run("shutdown_from_raised_pose", shutdownFromRaisedPose);
+  run("shutdown_move_failure_is_bounded", shutdownMoveFailureIsBounded);
+  run("shutdown_uncalibrated_and_unavailable", shutdownUncalibratedAndUnavailable);
+  run("power_off_sequence_ordering", powerOffSequenceOrdering);
+  run("control_command_history", controlCommandHistoryTests);
   std::cout << "HEAD_MOTION_INTEGRATION checks=" << checks << " failures=" << failures << '\n';
   return failures ? 1 : 0;
 }

@@ -29,11 +29,16 @@ class SCSCL {
     error = fake::responding() && fake::state.writeOK ? 0 : 1;
     if (error) return 0;
     fake::state.moves.push_back(value);
+    fake::state.events.push_back("move");
     fake::state.raw = value;
     return 1;
   }
-  int EnableTorque(int id, int) {
+  int EnableTorque(int id, int enabled) {
     pitchOnly(id);
+    fake::state.torqueWrites.push_back(enabled);
+    if (enabled == 0) {
+      fake::state.events.push_back("torque-off");
+    }
     return fake::responding() ? 1 : 0;
   }
 };

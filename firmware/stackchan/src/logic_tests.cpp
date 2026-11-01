@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "control_protocol.h"
 #include "event_chime.h"
 #include "head_policy.h"
 #include "head_startup.h"
@@ -288,6 +289,48 @@ static void protocolTests() {
   CHECK(decode(oversizedId).kind == MessageKind::BadEvent);
 }
 
+static void controlProtocolTests() {
+  const char* valid =
+      R"({"kind":"device.command","version":1,"id":"command-1","action":"poweroff"})";
+  const auto command = decode(valid);
+  CHECK(command.kind == MessageKind::DeviceCommand);
+  CHECK(!strcmp(command.id, "command-1"));
+  CHECK(decode(valid, false).kind == MessageKind::Ignored);
+  CHECK(
+      decode(R"({"kind":"device.command","version":2,"id":"command-1","action":"poweroff"})")
+          .kind == MessageKind::BadControl);
+  CHECK(
+      decode(R"({"kind":"device.command","version":1,"id":"command-1","action":"reboot"})")
+          .kind == MessageKind::BadControl);
+  CHECK(decode(R"({"kind":"device.command","version":1,"id":"","action":"poweroff"})").kind ==
+        MessageKind::BadControl);
+  CHECK(decode(R"({"kind":"device.command","version":1,"action":"poweroff"})").kind ==
+        MessageKind::BadControl);
+  CHECK(
+      decode(R"({"kind":"device.command","version":1,"id":"command-1","action":"poweroff","extra":1})")
+          .kind == MessageKind::DeviceCommand);
+
+  char id[66];
+  memset(id, 'x', sizeof(id) - 1);
+  id[sizeof(id) - 1] = 0;
+  char json[300];
+  snprintf(json, sizeof(json),
+           "{\"kind\":\"device.command\",\"version\":1,\"id\":\"%s\",\"action\":\"poweroff\"}", id);
+  CHECK(decode(json).kind == MessageKind::BadControl);
+  id[ControlProtocol::MAX_COMMAND_ID_BYTES] = 0;
+  snprintf(json, sizeof(json),
+           "{\"kind\":\"device.command\",\"version\":1,\"id\":\"%s\",\"action\":\"poweroff\"}", id);
+  CHECK(decode(json).kind == MessageKind::DeviceCommand);
+
+  ControlCommandHistory history;
+  CHECK(!history.contains("same"));
+  history.remember("same");
+  CHECK(history.contains("same"));
+  history.remember("next");
+  CHECK(history.contains("same"));
+  CHECK(history.contains("next"));
+}
+
 static void presentationTests() {
   // The bounded ID history is larger than the Arduino loop task's stack.
   static PresentationPolicy policy;
@@ -476,6 +519,7 @@ void setup() {
   headStartupTests();
   motionTests();
   protocolTests();
+  controlProtocolTests();
   presentationTests();
   approvalAudioTests();
   completionAudioTests();

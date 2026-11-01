@@ -7,6 +7,7 @@
     "start": "node scripts/indicator.mjs",
     "doctor": "node scripts/indicator.mjs --check",
     "session:reset": "node scripts/indicator.mjs --reset-session",
+    "poweroff": "node scripts/indicator.mjs --poweroff",
     "stability": "node scripts/stability.mjs",
     "dev": "vite --host 127.0.0.1",
     "dev:mock": "tsx server/index.ts --source=mock",

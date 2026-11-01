@@ -1,8 +1,15 @@
-import { createServer, type Server } from "node:http";
+import { randomUUID } from "node:crypto";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   AGENT_EVENT_KIND,
+  POWER_OFF_CONTROL_HEADER,
+  POWER_OFF_CONTROL_PATH,
+  POWER_OFF_CONTROL_VALUE,
   createBridgeHelloMessage,
+  createDeviceCommandMessage,
+  isDeviceCommandAckMessage,
+  isDeviceHelloMessage,
   type AgentEventMessage,
   type StatusMessage,
 } from "../src/domain/statusProtocol";
@@ -14,6 +21,13 @@ export type BridgeServerConfig = {
   bridgeSource: string;
   sourceIntervalMs?: number;
   heartbeatMs?: number;
+  powerOffAckTimeoutMs?: number;
+};
+
+export type PowerOffResult = {
+  target: number;
+  acknowledged: number;
+  timedOut: number;
 };
 
 export type BridgeServer = {
@@ -21,14 +35,27 @@ export type BridgeServer = {
   close: (onClosed?: () => void) => void;
   getClientCount: () => number;
   listen: (onListening?: () => void) => void;
+  requestPowerOff: () => Promise<PowerOffResult>;
   waitForClient: () => Promise<void>;
+};
+
+type PendingAck = {
+  client: WebSocket;
+  resolve: (acknowledged: boolean) => void;
 };
 
 export function createBridgeServer(config: BridgeServerConfig): BridgeServer {
   const clients = new Set<WebSocket>();
+  const firmwareClients = new Set<WebSocket>();
   const clientWaiters = new Set<() => void>();
+  const pendingAcks = new Map<string, PendingAck>();
   let latestAgentEventMessage: AgentEventMessage | undefined;
-  const server = createHealthServer(config, clients, () => latestAgentEventMessage);
+  const server = createHealthServer(
+    config,
+    clients,
+    () => latestAgentEventMessage,
+    () => requestPowerOff(),
+  );
   const wss = new WebSocketServer({ server, path: config.statusPath });
   const alive = new WeakMap<WebSocket, boolean>();
   const heartbeat = setInterval(() => {
@@ -61,10 +88,100 @@ export function createBridgeServer(config: BridgeServerConfig): BridgeServer {
       send(client, latestAgentEventMessage);
     }
 
+    client.on("message", (data) => {
+      let message: unknown;
+      try {
+        message = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+
+      if (isDeviceHelloMessage(message)) {
+        firmwareClients.add(client);
+        console.log(`[bridge] firmware registered devices=${firmwareClients.size}`);
+        return;
+      }
+
+      if (!isDeviceCommandAckMessage(message)) {
+        return;
+      }
+
+      const pending = pendingAcks.get(message.id);
+      if (!pending || pending.client !== client) {
+        return;
+      }
+
+      pendingAcks.delete(message.id);
+      pending.resolve(true);
+    });
+
     client.on("close", () => {
       clients.delete(client);
+      firmwareClients.delete(client);
+      for (const [id, pending] of pendingAcks) {
+        if (pending.client !== client) {
+          continue;
+        }
+        pendingAcks.delete(id);
+        pending.resolve(false);
+      }
     });
   });
+
+  async function requestPowerOff(): Promise<PowerOffResult> {
+    const targets = [...firmwareClients].filter((client) => client.readyState === WebSocket.OPEN);
+    if (!targets.length) {
+      return { target: 0, acknowledged: 0, timedOut: 0 };
+    }
+
+    const commands = targets.map((client) => {
+      const id = randomUUID();
+      const promise = new Promise<boolean>((resolve) => {
+        pendingAcks.set(id, { client, resolve });
+        client.send(JSON.stringify(createDeviceCommandMessage({ id })), (error) => {
+          if (!error) {
+            return;
+          }
+          const pending = pendingAcks.get(id);
+          if (!pending) {
+            return;
+          }
+          pendingAcks.delete(id);
+          pending.resolve(false);
+        });
+      });
+      return { id, promise };
+    });
+
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      const timeoutTimer = setTimeout(resolve, config.powerOffAckTimeoutMs ?? 1500);
+      timeoutTimer.unref();
+      timer = timeoutTimer;
+    });
+    await Promise.race([Promise.all(commands.map((command) => command.promise)), timeout]);
+    if (timer) {
+      clearTimeout(timer);
+    }
+
+    for (const command of commands) {
+      const pending = pendingAcks.get(command.id);
+      if (!pending) {
+        continue;
+      }
+      pendingAcks.delete(command.id);
+      pending.resolve(false);
+    }
+
+    const results = await Promise.all(commands.map((command) => command.promise));
+    const acknowledged = results.filter(Boolean).length;
+
+    return {
+      target: targets.length,
+      acknowledged,
+      timedOut: targets.length - acknowledged,
+    };
+  }
 
   return {
     broadcast(message) {
@@ -104,6 +221,7 @@ export function createBridgeServer(config: BridgeServerConfig): BridgeServer {
     getClientCount() {
       return clients.size;
     },
+    requestPowerOff,
     waitForClient() {
       if (clients.size > 0) {
         return Promise.resolve();
@@ -129,8 +247,49 @@ function createHealthServer(
   config: BridgeServerConfig,
   clients: Set<WebSocket>,
   getLatestAgentEventMessage: () => AgentEventMessage | undefined,
+  requestPowerOff: () => Promise<PowerOffResult>,
 ): Server {
   return createServer((request, response) => {
+    if (request.url === POWER_OFF_CONTROL_PATH) {
+      if (!isLoopbackAddress(request.socket.remoteAddress)) {
+        sendJson(response, 403, { ok: false, error: "loopback_required" });
+        return;
+      }
+      if (request.method !== "POST") {
+        sendJson(response, 405, { ok: false, error: "method_not_allowed" });
+        return;
+      }
+      if (
+        request.headers.origin !== undefined ||
+        request.headers[POWER_OFF_CONTROL_HEADER] !== POWER_OFF_CONTROL_VALUE
+      ) {
+        sendJson(response, 403, { ok: false, error: "control_header_required" });
+        return;
+      }
+
+      void requestPowerOff()
+        .then((result) => {
+          const complete = result.target > 0 && result.acknowledged === result.target;
+          const status = result.target === 0 ? 503 : complete ? 200 : 504;
+          sendJson(response, status, {
+            ok: complete,
+            target: result.target,
+            acknowledged: result.acknowledged,
+            timedOut: result.timedOut,
+            error:
+              result.target === 0
+                ? "no_registered_devices"
+                : complete
+                  ? undefined
+                  : "incomplete_acknowledgements",
+          });
+        })
+        .catch(() => {
+          sendJson(response, 500, { ok: false, error: "control_failed" });
+        });
+      return;
+    }
+
     if (request.url === "/health") {
       const latestAgentEventMessage = getLatestAgentEventMessage();
 
@@ -149,9 +308,23 @@ function createHealthServer(
       return;
     }
 
-    response.writeHead(404, { "content-type": "application/json" });
-    response.end(JSON.stringify({ ok: false, error: "not_found" }));
+    sendJson(response, 404, { ok: false, error: "not_found" });
   });
+}
+
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) {
+    return false;
+  }
+  if (address.startsWith("::ffff:")) {
+    return isLoopbackAddress(address.slice("::ffff:".length));
+  }
+  return address === "::1" || address.startsWith("127.");
+}
+
+function sendJson(response: ServerResponse, status: number, value: unknown) {
+  response.writeHead(status, { "content-type": "application/json" });
+  response.end(JSON.stringify(value));
 }
 
 function send(client: WebSocket, message: StatusMessage) {

@@ -22,6 +22,9 @@ struct State {
   std::vector<bool> powerWrites;
   std::vector<int> moves;
   std::vector<int> writeAttempts;
+  std::vector<int> torqueWrites;
+  std::vector<uint32_t> delays;
+  std::vector<std::string> events;
   std::vector<std::string> settingsWrites;
   std::string input;
   std::string output;
@@ -33,6 +36,7 @@ inline bool responding() {
 }  // namespace fake
 
 inline uint32_t millis() { return fake::state.now; }
+inline void delay(uint32_t value) { fake::state.delays.push_back(value); }
 inline constexpr int UART_NUM_1 = 1;
 struct FakeSerial {
   int available() { return static_cast<int>(fake::state.input.size()); }

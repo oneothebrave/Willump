@@ -30,6 +30,8 @@ device files, and the latest handoff state, see [HANDOFF.md](HANDOFF.md).
   head immediately when connected, and return to level only after a real disconnect.
 - Local diagnostics, explicit session reset, redacted event capture, and long-running stability
   sampling.
+- CLI-triggered software power-off for all currently connected StackChan devices, with per-device
+  acknowledgement counts.
 - A browser simulator for protocol development; it is not required for daily use.
 
 ## Requirements
@@ -88,6 +90,20 @@ willump
 Keep the terminal open and press `Ctrl+C` to stop a bridge started there. A healthy existing bridge
 is reused. Use `willump --reset` or `npm run session:reset` from another terminal to release the
 current CLI-session binding without terminating Codex.
+
+To power off every currently connected StackChan, run:
+
+```sh
+willump --poweroff
+# or: npm run poweroff
+```
+
+This contacts the already-running local bridge and never starts one. It reports the target,
+acknowledged, and timed-out device counts. An acknowledgement means the firmware validated and
+queued the command for its main loop; it does not mean the device has already powered off. A missing
+bridge, wrong bridge source, no registered firmware, zero acknowledgements, partial
+acknowledgements, or a timeout produces a diagnostic and a nonzero exit status unless every target
+acknowledges.
 
 ### 3. Run Codex normally
 
@@ -152,9 +168,13 @@ calibration, retry, and safety boundaries.
 The status and hook ports must differ. The hook receiver stays on loopback; expose only the status
 port to the trusted LAN used by the robot.
 
-The version-1 device protocol contains only `bridge.hello` and `agent.event`. Event types are defined
-in [src/domain/agentStatus.ts](src/domain/agentStatus.ts), and the wire format is defined in
-[src/domain/statusProtocol.ts](src/domain/statusProtocol.ts).
+The version-1 device protocol contains `bridge.hello`, `agent.event`, `device.hello`,
+`device.command`, and `device.command.ack`. Event types are defined in
+[src/domain/agentStatus.ts](src/domain/agentStatus.ts), and the wire format is defined in
+[src/domain/statusProtocol.ts](src/domain/statusProtocol.ts). The bridge accepts
+`POST /control/poweroff` only from loopback callers with the exact `x-willump-control: poweroff`
+header; browser preflights are not accepted. Commands are sent only to registered firmware sockets
+and are never cached or replayed after reconnect.
 
 ## Diagnostics
 
