@@ -166,9 +166,7 @@ export async function powerOff(config) {
 
   console.log(`[关机] 目标 ${target} 台，已确认 ${acknowledged} 台，超时 ${timedOut} 台。`);
   if (response.status === 200 && acknowledged === target && timedOut === 0) {
-    console.log(
-      "[关机] 所有目标设备已接受命令并排队执行；ACK 只表示已调度，不表示设备已经断电。",
-    );
+    console.log("[关机] 所有目标设备已接受命令并排队执行；ACK 只表示已调度，不表示设备已经断电。");
     return 0;
   }
 
@@ -210,6 +208,7 @@ export function createDiagnosticReporter(write = report) {
       status.bridgeOK,
       status.hooksOK,
       status.bridge?.clients,
+      status.bridge?.devices,
       observer?.phase,
       observer?.error,
       cliObserver?.phase,
@@ -231,10 +230,11 @@ function report(status) {
   );
   if (status.bridgeOK) {
     const count = status.bridge.clients;
+    const devices = status.bridge.devices;
     console.log(
-      `[连接] WebSocket 客户端：${Number.isInteger(count) ? count : "未知"}。协议没有设备身份，客户端数量不能单独证明机器人已连接。`,
+      `[连接] WebSocket 客户端：${Number.isInteger(count) ? count : "未知"}；已注册固件设备：${Number.isInteger(devices) ? devices : "未知"}。`,
     );
-    if (count === 0) {
+    if (devices === 0) {
       console.log(
         "[排查] 确认机器人开机、同一可互访 Wi-Fi、电脑 IP 与固件配置一致；检查专用网络防火墙 TCP 端口。",
       );

@@ -11,7 +11,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default="COM3")
     parser.add_argument("--seconds", type=float, default=10)
-    parser.add_argument("--expect")
+    parser.add_argument("--expect", action="append", default=[])
     parser.add_argument("--send", default="")
     parser.add_argument("--output")
     args = parser.parse_args()
@@ -43,8 +43,9 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(text, encoding="utf-8")
 
-    if args.expect and args.expect not in text:
-        raise SystemExit("Expected serial marker was not observed: " + args.expect)
+    for expected in args.expect:
+        if expected not in text:
+            raise SystemExit("Expected serial marker was not observed: " + expected)
 
 
 if __name__ == "__main__":

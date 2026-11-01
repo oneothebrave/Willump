@@ -4,16 +4,22 @@ import { createServer } from "node:net";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
+import { createDeviceHelloMessage } from "../src/domain/statusProtocol";
 import { createBridgeServer } from "./statusBroadcaster";
+
+async function reservePort() {
+  const reservation = createServer().listen(0, "127.0.0.1");
+  await once(reservation, "listening");
+  const port = (reservation.address() as { port: number }).port;
+  await new Promise<void>((resolve) => reservation.close(() => resolve()));
+  return port;
+}
 
 test(
   "heartbeat removes a silent peer and preserves a responding peer",
   { timeout: 5000 },
   async () => {
-    const reservation = createServer().listen(0, "127.0.0.1");
-    await once(reservation, "listening");
-    const port = (reservation.address() as { port: number }).port;
-    await new Promise<void>((resolve) => reservation.close(() => resolve()));
+    const port = await reservePort();
     const bridge = createBridgeServer({
       host: "127.0.0.1",
       port,
@@ -38,3 +44,32 @@ test(
     }
   },
 );
+
+test("health distinguishes registered firmware from generic websocket clients", async () => {
+  const port = await reservePort();
+  const bridge = createBridgeServer({
+    host: "127.0.0.1",
+    port,
+    statusPath: "/status",
+    bridgeSource: "test",
+  });
+  await new Promise<void>((resolve) => bridge.listen(resolve));
+  const client = new WebSocket(`ws://127.0.0.1:${port}/status`);
+  try {
+    await once(client, "open");
+    const genericHealth = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.equal(genericHealth.ok, true);
+    assert.equal(genericHealth.service, "agent-indicator-bridge");
+    assert.equal(genericHealth.source, "test");
+    assert.equal(genericHealth.clients, 1);
+    assert.equal(genericHealth.devices, 0);
+    client.send(JSON.stringify(createDeviceHelloMessage()));
+    await delay(10);
+    const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.equal(health.clients, 1);
+    assert.equal(health.devices, 1);
+  } finally {
+    client.terminate();
+    await new Promise<void>((resolve) => bridge.close(resolve));
+  }
+});

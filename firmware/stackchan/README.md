@@ -1,7 +1,7 @@
 # StackChan 固件
 
 目标设备 M5StackChan ESP32-S3，320×240 横屏、16MB Flash、Quad PSRAM。
-当前源码及设备固件为 `2026.10.26-r1`，默认环境为 status-client。
+当前源码及设备固件为 `2026.11.01-r1`，默认环境为 status-client；真机版本以串口验收为准。
 启动和读取重试不再切断舵机 VM，开机未连接时不主动回平，合法连接立即优先抬头。
 两种关机姿态和工作状态的真机验收见 [重启修复记录](../../docs/head-reboot-2026-10-26.md)。
 当前 Mac 使用固定 `.local` 主机名连接，修复 DHCP 地址变化后机器找不到后台的问题，见 [连接记录](../../docs/bridge-hostname-2026-10-25.md)。
@@ -60,8 +60,10 @@ WebSocket 重连时通过主机名解析地址；电脑与机器人需处于允�
 Wi-Fi 每 15 秒重试，WebSocket 每 3 秒重连并检测心跳；须收到合法 hello 才接收事件。
 网络掉线覆盖为 offline，不当成 Agent error。
 
-若 include/config.local.h 不存在，复制 config.example.h 并在本地填写配置。
-已有文件不覆盖。USE_SAVED_WIFI=true 优先复用设备配置；无保存配置时调试页显示
+`include/config.local.h` 是当前设备唯一的本地配置源；不要从 `.tmp` 历史副本烧录。
+若文件不存在，复制 config.example.h 并在本地填写配置。已有文件不覆盖。
+当前设备的 `BRIDGE_HOST` 必须使用稳定的 `.local` 主机名；统一入口会拒绝 DHCP IPv4。
+USE_SAVED_WIFI=true 优先复用设备配置；无保存配置时调试页显示
 Wi-Fi not configured，改为 false 并本地填写 SSID/password。不要提交凭据或固件二进制。
 常规烧录不擦除独立 indicator-head NVS，也不改原厂舵机零点。
 
@@ -95,12 +97,13 @@ $backupFile = ".tmp/hardware-backups/stackchan-before-$(Get-Date -Format 'yyyyMM
 Get-FileHash -Algorithm SHA256 -LiteralPath $backupFile
 ```
 
-```powershell
-$env:PLATFORMIO_CORE_DIR = "$PWD/.tmp/platformio"
-.tmp/hardware-venv/Scripts/python.exe -m platformio run -d firmware/stackchan -e status-client
-.tmp/hardware-venv/Scripts/python.exe -m platformio run -d firmware/stackchan -e status-client -t upload --upload-port COM3
-.tmp/hardware-venv/Scripts/python.exe scripts/read-device.py --port COM3 --seconds 5 --send v
+```sh
+npm run firmware:upload -- --check
+npm run firmware:upload -- --port /dev/cu.usbmodemXXXX
 ```
+
+统一入口从项目固件目录构建，烧录后同时核对版本、实际 bridge 地址和后台注册设备数。
+底层 PlatformIO 命令仅用于排障，不能替代这些验收。
 
 串口版本、head level/target/raw/automatic/fault 可确认固件和姿态策略。
 上传和读取命令中的 COM3 均需替换为实际端口。

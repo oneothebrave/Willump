@@ -142,19 +142,17 @@ macOS 也不能可靠识别交互 CLI 与 Desktop/app-server/exec；默认会绑
 
 ## 当前已配网设备的构建与烧录
 
-本次为保留原项目 Wi-Fi 配置，使用被 Git 忽略的独立构建副本。活动索引为
-`.tmp/device-provisioning/active.json`，当前副本路径如下：
+历史验收曾使用被 Git 忽略的独立构建副本。为避免后续烧录重新带回旧 IP，当前设备改用
+`firmware/stackchan/include/config.local.h` 作为唯一配置源；`.tmp/device-provisioning/`
+仅作为历史证据，不再用于烧录。
 
 ```sh
-export PLATFORMIO_CORE_DIR="$PWD/.tmp/platformio"
-DEVICE_PROJECT="$PWD/.tmp/device-provisioning/head-reboot-20261026-r1/stackchan"
-.tmp/hardware-venv/bin/python -m platformio run -d "$DEVICE_PROJECT" -e status-client
-.tmp/hardware-venv/bin/python -m platformio run -d "$DEVICE_PROJECT" -e status-client -t upload --upload-port /dev/cu.usbmodem21401
+npm run firmware:upload -- --check
+npm run firmware:upload -- --port /dev/cu.usbmodem21401
 ```
 
-该副本使用精确 SSID `DuanWu`、bridge `larrys-mac-mini.local:8787`，密码只在本机设备配置与镜像中。
-原项目 `firmware/stackchan/include/config.local.h` 仍是原内容，后续重烧录当前设备请使用此副本。
-当前副本为 `2026.10.26-r1`，修复重启后姿态及舵机启动恢复，沿用固定主机名、turn 完成音效、问号落地动画及审批音；见 [真机验收](head-reboot-2026-10-26.md)。后续升级源码时，在新的构建副本沿用设备配置后重新构建。
+本地配置继续保存 Wi-Fi 凭据和 `larrys-mac-mini.local:8787`，不会提交 Git。
+统一入口拒绝 DHCP IPv4，烧录后核对串口版本、实际 bridge 地址以及后台 `devices` 数量。
 2026-10-25 电脑 DHCP 地址由 `192.168.3.49` 变为 `192.168.3.47`，后台正常但机器仍连接旧 IP。
 已改用固定主机名恢复连接；根目录运行 `willump` 的启动脚本正常，详见 [连接修复](bridge-hostname-2026-10-25.md)。
 迁移电脑时私下保留设备配置并重建工具缓存，配置和镜像不提交 Git。

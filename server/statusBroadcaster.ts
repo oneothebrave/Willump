@@ -53,6 +53,7 @@ export function createBridgeServer(config: BridgeServerConfig): BridgeServer {
   const server = createHealthServer(
     config,
     clients,
+    firmwareClients,
     () => latestAgentEventMessage,
     () => requestPowerOff(),
   );
@@ -246,6 +247,7 @@ export function createBridgeServer(config: BridgeServerConfig): BridgeServer {
 function createHealthServer(
   config: BridgeServerConfig,
   clients: Set<WebSocket>,
+  firmwareClients: Set<WebSocket>,
   getLatestAgentEventMessage: () => AgentEventMessage | undefined,
   requestPowerOff: () => Promise<PowerOffResult>,
 ): Server {
@@ -300,6 +302,7 @@ function createHealthServer(
           service: "agent-indicator-bridge",
           source: config.bridgeSource,
           clients: clients.size,
+          devices: firmwareClients.size,
           uptimeSeconds: Math.floor(process.uptime()),
           memory: { rss: process.memoryUsage().rss, heapUsed: process.memoryUsage().heapUsed },
           latestAgentEvent: latestAgentEventMessage?.event,
