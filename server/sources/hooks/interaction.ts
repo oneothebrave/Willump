@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import WebSocket from "ws";
 
 type Binding = { sessionId: string | null; turnId: string | null };
-type Report = (session: string, turn: string, waiting: boolean | null) => unknown;
+type InteractionState = boolean | "idle" | null;
+type Report = (session: string, turn: string, state: InteractionState) => unknown;
 type Phase = "unbound" | "connecting" | "reading" | "unavailable" | "error" | "stopped";
 type Pending = {
   resolve: (result: unknown) => void;
@@ -172,12 +173,16 @@ export function createInteractionWatcher(
         report(sessionId, turnId, null);
         return;
       }
-      const flags = status.type === "active" ? (status.activeFlags as unknown[]) : [];
-      report(
-        sessionId,
-        turnId,
-        flags.includes("waitingOnApproval") || flags.includes("waitingOnUserInput"),
-      );
+      if (status.type === "idle") {
+        report(sessionId, turnId, "idle");
+      } else {
+        const flags = status.activeFlags as unknown[];
+        report(
+          sessionId,
+          turnId,
+          flags.includes("waitingOnApproval") || flags.includes("waitingOnUserInput"),
+        );
+      }
       phase = "reading";
       error = null;
       lastReadAt = Date.now();

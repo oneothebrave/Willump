@@ -113,6 +113,7 @@ export function createHookEventPublisher(
   let ignored = 0;
   let runtimeInteractions = options.runtimeInteractions ?? false;
   let runtimeWaiting: boolean | undefined;
+  let runtimeIdle = false;
   let asyncInputWaiting = false;
 
   function remember(set: Set<string>, key: string) {
@@ -134,6 +135,7 @@ export function createHookEventPublisher(
     waiting.clear();
     subagents.clear();
     runtimeWaiting = undefined;
+    runtimeIdle = false;
     asyncInputWaiting = false;
   }
 
@@ -159,6 +161,9 @@ export function createHookEventPublisher(
   }
 
   function publishActivity(event: HookEvent) {
+    if (runtimeIdle) {
+      return;
+    }
     emit(currentActivity(), `CLI hook: ${event.hook_event_name}`, event.id);
   }
 
@@ -182,22 +187,45 @@ export function createHookEventPublisher(
       }
       const previous = currentActivity();
       asyncInputWaiting = isWaiting;
+      if (runtimeIdle) {
+        return true;
+      }
       const next = currentActivity();
       if (previous !== next) {
         emit(next, "CLI asynchronous question status changed");
       }
       return true;
     },
-    observeInteraction(sessionId: string, turnId: string, isWaiting: boolean | null) {
+    observeInteraction(sessionId: string, turnId: string, state: boolean | "idle" | null) {
       // An old read must never affect another turn, a reset, or a terminal state.
       if (session !== sessionId || turn !== turnId || terminal) {
         return false;
       }
+      if (state === "idle") {
+        runtimeInteractions = true;
+        runtimeWaiting = false;
+        tools.clear();
+        waiting.clear();
+        subagents.clear();
+        asyncInputWaiting = false;
+        if (!runtimeIdle) {
+          runtimeIdle = true;
+          emit("thread.idle", "CLI runtime reports thread idle");
+        }
+        return true;
+      }
+      if (state === null && runtimeIdle) {
+        runtimeInteractions = false;
+        runtimeWaiting = undefined;
+        return true;
+      }
+      const wasIdle = runtimeIdle;
       const previous = currentActivity();
-      runtimeInteractions = isWaiting !== null;
-      runtimeWaiting = isWaiting ?? undefined;
+      runtimeInteractions = state !== null;
+      runtimeWaiting = state ?? undefined;
+      runtimeIdle = false;
       const next = currentActivity();
-      if (previous !== next) {
+      if (wasIdle || previous !== next) {
         emit(next, "CLI user-interaction status changed");
       }
       return true;
@@ -296,6 +324,7 @@ export function createHookEventPublisher(
         waiting.clear();
         subagents.clear();
         runtimeWaiting = undefined;
+        runtimeIdle = false;
         asyncInputWaiting = false;
       } else if (event.turn_id) {
         if (turn && turn !== event.turn_id) {

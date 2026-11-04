@@ -66,7 +66,7 @@ test(
   { skip: unsupported },
   async (context) => {
     const server = await runtime(context);
-    const observed: (boolean | null)[] = [];
+    const observed: (boolean | "idle" | null)[] = [];
     const watcher = createInteractionWatcher(
       server.path,
       () => ({ sessionId: "s", turnId: "t" }),
@@ -86,7 +86,9 @@ test(
       );
     }
     await watcher.poll();
-    assert.deepEqual(observed, [false, true, true, false]);
+    server.setStatus({ type: "idle" });
+    await watcher.poll();
+    assert.deepEqual(observed, [false, true, true, false, "idle"]);
     assert.equal(watcher.status().phase, "reading");
     assert.ok(watcher.status().lastReadAt);
     assert.equal(
@@ -104,6 +106,65 @@ test(
         .every((request: any) => request.params.includeTurns === false),
     );
     assert.equal(JSON.stringify(watcher.status()).includes("private"), false);
+  },
+);
+
+test(
+  "runtime idle clears missing Stop activity while preserving a later completion",
+  { skip: unsupported },
+  async (context) => {
+    const server = await runtime(context);
+    const messages: StatusMessage[] = [];
+    const publisher = createHookEventPublisher((message) => messages.push(message), undefined, {
+      runtimeInteractions: true,
+    });
+    const event = (
+      name: HookEvent["hook_event_name"],
+      id: string,
+      fields: Partial<HookEvent> = {},
+    ): HookEvent => ({
+      id,
+      hook_event_name: name,
+      session_id: "review-session",
+      turn_id: "review-turn",
+      ...fields,
+    });
+    const last = () => {
+      const message = messages[messages.length - 1];
+      return message.kind === "agent.event" ? message.event.type : undefined;
+    };
+
+    publisher.receive(event("UserPromptSubmit", "prompt"));
+    publisher.receive(
+      event("PreToolUse", "review", { tool_name: "Review", tool_use_id: "review-tool" }),
+    );
+    assert.equal(last(), "tool.started");
+
+    const watcher = createInteractionWatcher(
+      server.path,
+      publisher.status,
+      publisher.observeInteraction,
+      { intervalMs: 60000 },
+    );
+    context.after(() => watcher.stop());
+    server.setStatus({ type: "idle" });
+    await watcher.poll();
+    assert.equal(last(), "thread.idle");
+    assert.equal(publisher.status().activeTools, 0);
+    assert.equal(publisher.status().turnId, "review-turn");
+
+    publisher.receive(
+      event("PostToolUse", "late-review-result", {
+        tool_name: "Review",
+        tool_use_id: "review-tool",
+      }),
+    );
+    assert.equal(last(), "thread.idle");
+    publisher.observeInteraction("review-session", "review-turn", null);
+    assert.equal(last(), "thread.idle");
+
+    publisher.receive(event("Stop", "stop"));
+    assert.equal(last(), "turn.completed");
   },
 );
 
@@ -204,7 +265,7 @@ test(
   { skip: unsupported },
   async (context) => {
     const server = await runtime(context);
-    const observed: (boolean | null)[] = [];
+    const observed: (boolean | "idle" | null)[] = [];
     const watcher = createInteractionWatcher(
       server.path,
       () => ({ sessionId: "s", turnId: "t" }),
@@ -228,7 +289,7 @@ test(
   { skip: unsupported },
   async (context) => {
     const server = await runtime(context);
-    const observed: (boolean | null)[] = [];
+    const observed: (boolean | "idle" | null)[] = [];
     const watcher = createInteractionWatcher(
       server.path,
       () => ({ sessionId: "s", turnId: "t" }),

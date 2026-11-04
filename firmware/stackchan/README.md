@@ -110,6 +110,17 @@ npm run firmware:upload -- --port /dev/cu.usbmodemXXXX
 写入哈希校验不代替目视确认。screen-demo 只用于首轮屏幕 bring-up，须显式 -e screen-demo，
 它显示标题、RGB 色块和 Uptime，不接日常状态。
 
+camera-probe 只用于 CoreS3/StackChan 相机 bring-up：通过现有 `M5.In_I2C` 的 AW9523 P1_0
+给 GC0308 上电，SCCB 复用 `I2C_NUM_1`，单次抓取 320×240 RGB565 帧。串口只输出尺寸、
+格式、长度和校验和，屏幕显示 PASS 或 FAIL 后停止；不联网、不播放音频、不控制头部。
+须显式指定 `-e camera-probe`，验证后恢复 status-client。
+
+camera-stream-probe 是独立的局域网传输验证：以每秒一次尝试向 `BRIDGE_HOST:8790/frame`
+发送 10 帧经接收端确认的 320×240 RGB565 原始数据（最多尝试 20 次），Mac 端
+`node scripts/camera-frame-receiver.mjs`
+仅在内存中校验元数据、长度和校验和，不保存图像。该探针不包含 MediaPipe，也不与
+status-client 同时运行；HTTP 明文仅适用于可信局域网，验证后须恢复 status-client。
+
 ## 固件回归
 
 logic-test 在 ESP32 上运行纯头部策略、动画关键帧、控制协议解析、去重和完成展示策略。

@@ -42,23 +42,24 @@ CLI hook 超时配置为 2 秒。Windows 本地身份查询是同步适配器，
 
 ## 状态映射
 
-| Hook / 信号 | 统一事件 / 状态 |
-| --- | --- |
-| UserPromptSubmit | turn.started / thinking |
-| PreToolUse：Bash | command.started / running |
-| PreToolUse：apply_patch | file.change / editing |
-| 其他工具开始 | tool.started / tool |
-| PermissionRequest | 记录审批候选；有实时状态时不单独判定 waiting |
-| waitingOnApproval / waitingOnUserInput | approval.requested / waiting |
-| 异步问题卡片创建 / 后续用户消息 | waiting / 恢复当前工具活动或 thinking |
-| 实时等待标记清空 | 立即恢复当前活动，不必等待工具执行结束 |
-| PostToolUse | 更新工具活动；保留真正未完成的用户交互 |
-| SubagentStart / SubagentStop | 保留审批/工具优先级；仍有子代理时 tool，否则 thinking |
-| PreCompact / PostCompact | 按当前活动恢复，无工具时 thinking |
-| Stop | turn.completed / done |
-| Interrupt / SessionEnd | thread.idle / idle |
-| 本地 transcript 的显式整轮终止错误 | turn.failed / error |
-| 绑定 CLI 真实进程退出 | thread.idle / idle，释放会话 |
+| Hook / 信号                            | 统一事件 / 状态                                         |
+| -------------------------------------- | ------------------------------------------------------- |
+| UserPromptSubmit                       | turn.started / thinking                                 |
+| PreToolUse：Bash                       | command.started / running                               |
+| PreToolUse：apply_patch                | file.change / editing                                   |
+| 其他工具开始                           | tool.started / tool                                     |
+| PermissionRequest                      | 记录审批候选；有实时状态时不单独判定 waiting            |
+| waitingOnApproval / waitingOnUserInput | approval.requested / waiting                            |
+| 异步问题卡片创建 / 后续用户消息        | waiting / 恢复当前工具活动或 thinking                   |
+| 实时等待标记清空                       | 立即恢复当前活动，不必等待工具执行结束                  |
+| 绑定线程的 runtime 状态为 idle         | thread.idle / idle；不猜测成功，迟到 Stop 仍可转为 done |
+| PostToolUse                            | 更新工具活动；保留真正未完成的用户交互                  |
+| SubagentStart / SubagentStop           | 保留审批/工具优先级；仍有子代理时 tool，否则 thinking   |
+| PreCompact / PostCompact               | 按当前活动恢复，无工具时 thinking                       |
+| Stop                                   | turn.completed / done                                   |
+| Interrupt / SessionEnd                 | thread.idle / idle                                      |
+| 本地 transcript 的显式整轮终止错误     | turn.failed / error                                     |
+| 绑定 CLI 真实进程退出                  | thread.idle / idle，释放会话                            |
 
 thinking 表示当前处理阶段，不读取内部推理。editing 表示工具开始，不保证写入成功。
 当前固件 `2026.10.26-r1` 沿用问号落地动画与审批音，并在新的 `turn.completed` 时播放一次 iOS 确认“叮咚”。重复通知和历史重连快照不补播声音，见 [问号动画](permission-question-animation.md)、[审批提示音](approval-audio.md)与[Turn 完成音效](completion-audio.md)。
@@ -67,7 +68,8 @@ Stop 仅表示响应停止，不保证任务成功。CLI 没有托管搜索或�
 
 2026-10-20 已修复审批结束后问号滞留及自动审批误报，见 [修复与实测](interaction-state-2026-10-20.md)。
 当前 Mac 上从已有 daemon 每 250ms 只读 `thread/read(includeTurns=false)`，
-只使用绑定会话的状态；不启动、恢复或接管会话，不响应审批/输入请求。
+只使用绑定会话的状态；显式 idle 会清除遗留工具活动并显示空闲，但不冒充成功，随后到达的
+Stop 仍可显示完成。不启动、恢复或接管会话，不响应审批/输入请求。
 异步提问不一定设置阻塞等待标记，额外识别当前轮次的类型化问题卡片元数据和后续用户消息。
 不解析问题/回答正文，也不靠时间推断用户已完成交互。历史回放追到文件末尾后才提交状态，避免旧问题闪现。
 
